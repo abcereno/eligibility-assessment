@@ -1,0 +1,123 @@
+/* --- Rounded, animated, brand-aware polish --- */
+
+/* extra radius token */
+:root {
+  --radius-xl: 16px;
+  --shadow-1: 0 8px 24px rgba(0,0,0,.08);
+  --shadow-2: 0 10px 30px rgba(0,0,0,.12);
+}
+
+/* Softer background gradient */
+body {
+  background:
+    radial-gradient(1200px 600px at 100% -10%, rgba(0,0,0,.03), transparent 60%),
+    radial-gradient(800px 500px at -10% 0%, rgba(0,0,0,.03), transparent 60%),
+    var(--background-color);
+}
+
+/* Cards: rounded + subtle hover lift */
+.card {
+  border-radius: var(--radius-xl);
+  background: linear-gradient(180deg, rgba(255,255,255,.96), rgba(255,255,255,.92));
+  border: 1px solid rgba(0,0,0,.06);
+  box-shadow: var(--shadow-1);
+  transition: transform var(--transition-default), box-shadow var(--transition-default), background .4s ease;
+  will-change: transform;
+}
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-2);
+}
+
+/* Badges: pill + softer */
+.badge {
+  border-radius: 9999px;
+  padding: .35rem .65rem;
+  background: rgba(0,0,0,.06);
+  border: 1px solid rgba(0,0,0,.05);
+}
+
+/* Buttons: pill, micro-animation */
+.btn, .btn.ghost, .btn.danger {
+  border-radius: 9999px;
+  padding: .7rem 1rem;
+  transition: transform .18s ease, box-shadow .18s ease, background .18s ease, opacity .18s ease;
+}
+.btn:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(0,0,0,.08); }
+.btn:active { transform: translateY(0); }
+
+/* Modal: scale/fade in */
+.modal .modal-content {
+  border-radius: 18px;
+  animation: modalIn .18s ease-out both;
+}
+@keyframes modalIn {
+  from { transform: translateY(4px) scale(.985); opacity: 0; }
+  to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+/* Section title: slight underline accent */
+.section-title {
+  position: relative;
+}
+.section-title::after {
+  content: "";
+  position: absolute;
+  left: 0; bottom: -6px;
+  width: 36px; height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--primary-color), color-mix(in oklab, var(--primary-color) 60%, white));
+  opacity: .9;
+}
+
+/* Meter / progress: fully rounded with animated fill & shimmer */
+.progress-container {
+  margin: .75rem 0 1.25rem;
+}
+.progress-bar {
+  height: 14px;
+  background: color-mix(in oklab, var(--secondary-color) 8%, white);
+  border: 1px solid rgba(0,0,0,.06);
+  border-radius: 9999px;
+  overflow: hidden;
+  position: relative;
+}
+.progress-fill {
+  --value: 0%;
+  width: var(--value);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg,
+    color-mix(in oklab, var(--primary-color) 88%, white),
+    color-mix(in oklab, var(--primary-color) 70%, white)
+  );
+  transition: width .7s cubic-bezier(.2,.7,.2,1);
+}
+.progress-fill::after { /* shimmer */
+  content: "";
+  position: absolute; inset: 0;
+  background: linear-gradient(110deg, transparent 0%, rgba(255,255,255,.35) 35%, transparent 65%);
+  transform: translateX(-100%);
+  animation: shimmer 1.6s linear infinite;
+}
+@keyframes shimmer {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(100%); }
+}
+
+/* Reveal on scroll */
+.reveal {
+  opacity: 0;
+  transform: translateY(10px) scale(.995);
+  transition: opacity .5s ease, transform .5s ease;
+}
+.reveal.in-view {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+/* Respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .card, .badge, .btn, .modal .modal-content,
+  .reveal, .progress-fill { transition: none !important; animation: none !important; }
+}
