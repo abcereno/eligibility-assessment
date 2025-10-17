@@ -66,6 +66,8 @@ export default function FormPage() {
  const currentQual = useMemo(() => dataset?.[qualificationCode] || null, [dataset, qualificationCode]);
  const allUnits = currentQual?.units || [];
  const unitCount = allUnits.length;
+console.log(currentQual);
+console.log(allUnits);
 
  useEffect(() => {
   if (!dataset || !qualificationCode) return;
@@ -246,37 +248,66 @@ export default function FormPage() {
        />
       </div>
   
-      <div className="card reveal">
-       {currentQual ? (
-        <>
-         <h2 className="section-title">{currentQual.code} — {currentQual.name}</h2>
-         <div className="stats-grid" style={{ marginBottom: 12 }}>
-          <div className="stat-box">
-           <div className="stat-label">Total Units</div>
-           <div className="stat-value">{unitCount}</div>
-          </div>
-         </div>
-         <ProgressBar label="Evidence Progress" value={evidencePercent} />
-         <ProgressBar label="Referee Progress" value={refereePercent} />
-         <ProgressBar label="Gap Training Progress" value={gapPercent} />
-         <UnitsTable units={allUnits} checks={checks} setExclusive={setExclusive} />
-         <div className="grid cols-3" style={{ gap: 12 }}>
-          <div className="card">
-           <h4>Evidence Units Selected:</h4>
-           <pre style={{ whiteSpace: "pre-wrap" }}>{evidenceList.join("\n")}</pre>
-          </div>
-          <div className="card">
-           <h4>Referee Units Selected:</h4>
-           <pre style={{ whiteSpace: "pre-wrap" }}>{refereeList.join("\n")}</pre>
-          </div>
-          <div className="card">
-           <h4>Gap Training Units Selected:</h4>
-           <pre style={{ whiteSpace: "pre-wrap" }}>{gapList.join("\n")}</pre>
-          </div>
-         </div>
-        </>
-       ) : null}
+<div className="card reveal">
+  {currentQual ? (
+    <>
+      
+      <h2 className="section-title">{currentQual.code} — {currentQual.name}</h2>
+      {/* Updated Stats Grid */}
+<div className="progress-card" style={{ marginBottom: 24 }}>
+  <div className="stat-box">
+    <div className="stat-box-content">
+      <div className="stat-label">Total Units</div>
+      <div className="stat-value">{unitCount}</div>
+    </div>
+    {/* The water-fill element */}
+    <div className="water-fill" style={{ top: `calc(100% - 100%)` }}></div>
+  </div>
+  <div className="stat-box">
+    <div className="stat-box-content">
+      <div className="stat-label">Evidence Progress</div>
+      <div className="stat-value">{evidencePercent}%</div>
+    </div>
+    {/* The water-fill element */}
+    <div className="water-fill" style={{ top: `calc(100% - ${evidencePercent}%)` }}></div>
+  </div>
+  <div className="stat-box">
+    <div className="stat-box-content">
+      <div className="stat-label">Referee Progress</div>
+      <div className="stat-value">{refereePercent}%</div>
+    </div>
+    {/* The water-fill element */}
+    <div className="water-fill" style={{ top: `calc(100% - ${refereePercent}%)` }}></div>
+  </div>
+  <div className="stat-box">
+    <div className="stat-box-content">
+      <div className="stat-label">Gap Training</div>
+      <div className="stat-value">{gapPercent}%</div>
+    </div>
+    {/* The water-fill element */}
+    <div className="water-fill" style={{ top: `calc(100% - ${gapPercent}%)` }}></div>
+  </div>
+</div>
+
+      <UnitsTable units={allUnits} checks={checks} setExclusive={setExclusive} />
+
+      <div className="grid cols-3" style={{ gap: 12, marginTop: 24 }}>
+        <div className="card">
+          <h4>Evidence Units Selected:</h4>
+          <pre style={{ whiteSpace: "pre-wrap" }}>{evidenceList.join("\n")}</pre>
+        </div>
+        <div className="card">
+          <h4>Referee Units Selected:</h4>
+          <pre style={{ whiteSpace: "pre-wrap" }}>{refereeList.join("\n")}</pre>
+        </div>
+        <div className="card">
+          <h4>Gap Training Units Selected:</h4>
+          <pre style={{ whiteSpace: "pre-wrap" }}>{gapList.join("\n")}</pre>
+        </div>
       </div>
+    </>
+  ) : null}
+</div>
   
       <div className="card reveal" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
        <button className="btn" onClick={handleSendToWebhook}>Save to Lead Connector</button>

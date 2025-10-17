@@ -30,17 +30,27 @@ export default function UnitsTable({ units, checks, setExclusive }) {
 
             return (
               <tr key={u.code}>
-                <td>
-                  <strong>{u.code}: {u.name}</strong>
-                  <span style={{ fontWeight: "bold", color: u.type === "core" ? "blue" : u.type === "elective" ? "green" : "red" }}>
-                    {" "}({typeLbl}){" "}
-                    {u.group ? <strong><span style={{ color: "green" }}>Group: {u.group}</span></strong> : null}
-                  </span>
-                  <br />
-                  <small>{u.desc}</small>
-                  <br />
-                  <a href={tga} target="_blank" rel="noreferrer" className="tga-link-button">View on training.gov.au</a>
-                </td>
+<td>
+  <strong>{u.code}: {u.name}</strong>
+  <span style={{ fontWeight: "bold", color: u.type === "core" ? "blue" : u.type === "elective" ? "#fdb715" : "red" }}>
+    {" "}({typeLbl}){" "}
+    {u.group ? <strong><span style={{ color: "green" }}>Group: {u.group}</span></strong> : null}
+  </span>
+
+  {/* Adds space above the description if it exists */}
+  {u.desc && (
+    <div style={{ marginTop: '8px' }}>
+      <small>{u.desc}</small>
+    </div>
+  )}
+
+  {/* Adds space above the link */}
+  <div style={{ marginTop: '4px', borderRadius: '4px', backgroundColor: '#9e8dffff', display: 'inline-block', padding: '2px 6px' }}>
+    <a href={tga} target="_blank" rel="noreferrer" className="tga-link-button">
+      View on training.gov.au
+    </a>
+  </div>
+</td>
                 <td>
                   <label>
                     <input type="radio" name={groupName} checked={checks.evidence.has(u.code)} onChange={() => setExclusive("evidence", u.code)} />

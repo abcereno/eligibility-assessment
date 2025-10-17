@@ -209,3 +209,104 @@ input,select,textarea{width:100%;padding:10px;border:1px solid #e5e7eb;border-ra
   box-shadow: 0 1px 3px rgba(0,0,0,0.05);
   text-decoration: none;
 }
+
+/* Add these styles to your index.css file */
+
+.progress-card {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 1.5rem;
+  /* --- Sticky Properties --- */
+  position: -webkit-sticky; /* For Safari */
+  position: sticky;
+  top: 80px; /* Adjust this value to sit below your navbar. 80px should work well. */
+  z-index: 10; /* Ensures it stays on top of other content when scrolling */
+
+  /* --- Styling for the Sticky State --- */
+  background-color: rgba(255, 255, 255, 0.9); /* A slightly transparent background */
+  backdrop-filter: blur(8px); /* Adds a modern blur effect to the background */
+  -webkit-backdrop-filter: blur(8px);
+  padding: 1rem;
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+  border: 1px solid #e5e7eb;
+  margin-bottom: 24px; /* Retains original margin */
+}
+
+.stat-box {
+  flex: 1;
+  min-width: 150px;
+  background-color: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  padding: 1.25rem;
+  text-align: center;
+  position: relative; /* Required for the water effect */
+  overflow: hidden; /* Hides the wave overflow */
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+}
+
+.stat-box-content {
+  position: relative; /* Keeps text on top of the water */
+  z-index: 2;
+}
+
+.stat-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #4b5563;
+  margin-bottom: 0.5rem;
+  display: block;
+}
+
+.stat-value {
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: #111827;
+  line-height: 1;
+}
+
+/* The Water Fill Effect */
+.water-fill {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: var(--primary-color);
+  opacity: 0.8;
+  z-index: 1;
+  transition: top 0.8s cubic-bezier(0.25, 1, 0.5, 1);
+  will-change: top;
+}
+
+/* The Animated Wave using SVG */
+.water-fill::before,
+.water-fill::after {
+  content: '';
+  position: absolute;
+  width: 200%;
+  height: 20px;
+  left: -50%;
+  background-repeat: repeat-x;
+}
+
+.water-fill::before {
+  top: -19px;
+  /* A soft, transparent wave */
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M0,50 C25,25 75,75 100,50 L100,100 L0,100 Z" fill="%23fdb715" opacity="0.5"/></svg>');
+  animation: wave 5s ease-in-out infinite;
+}
+
+.water-fill::after {
+  top: -20px;
+  /* A more solid wave moving in the opposite direction */
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M0,50 C25,75 75,25 100,50 L100,100 L0,100 Z" fill="%23fdb715"/></svg>');
+  animation: wave 7s linear infinite reverse;
+}
+
+@keyframes wave {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}

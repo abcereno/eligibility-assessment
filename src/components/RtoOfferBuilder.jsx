@@ -1,7 +1,4 @@
-// =============================================================
-// File: src/refactor/components/RtoOfferBuilderPaste.jsx
-// =============================================================
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 
 const LS_KEY = "rtoOfferBuilderPaste:last";
@@ -10,36 +7,20 @@ const EMPTY_ROW = {
   unit_code: "",
   unit_name: "",
   unit_description: "",
+  application_details: "",
   unit_type: "core",
   group_label: "",
+  qualification_variation: "",
+  qualification_name: ""
 };
 
-// We only *read* qualification_code from CSV; we ignore qualification_name for DB writes
-const KNOWN_HEADERS = [
-  "unit_code","unit_name","unit_description","unit_type","group_label",
-  "qualification_code","qualification_name","rto_code"
-];
-
+// --- UTILITY FUNCTIONS ---
+const clean = (s) => String(s ?? "").replace(/^\uFEFF/, "").replace(/\u00A0/g, " ").trim();
 const norm = (s) => (s || "").trim();
 const normCode = (s) => norm(s).toUpperCase();
+const keyify = (s) => clean(s).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 
-// Clean text (BOM, zero-width, LRM/RLM, bidi marks) and trim
-const clean = (s) =>
-  String(s ?? "")
-    .replace(/^\uFEFF/, "")                 // BOM
-    .replace(/[\u200B-\u200D\u2060]/g, "") // zero-width
-    .replace(/[\u200E\u200F\u202A-\u202E]/g, "") // LRM/RLM & bidi
-    .replace(/\u00A0/g, " ")               // NBSP → space
-    .trim();
-
-// Normalize header keys to a canonical form like "unit_code"
-const keyify = (s) =>
-  clean(s)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-
-// ---------- CSV (RFC4180-ish) ----------
+// --- CSV PARSING LOGIC ---
 function parseCsv(text) {
   const rows = [];
   let row = [];
@@ -52,120 +33,74 @@ function parseCsv(text) {
 
   while (i < text.length) {
     const ch = text[i];
-
     if (inQuotes) {
       if (ch === '"') {
-        if (text[i + 1] === '"') { field += '"'; i += 2; continue; } // escaped quote
+        if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
         inQuotes = false; i++; continue;
       }
       field += ch; i++; continue;
     }
-
     if (ch === '"') { inQuotes = true; i++; continue; }
     if (ch === ",") { pushField(); i++; continue; }
     if (ch === "\r") { if (text[i + 1] === "\n") i++; pushField(); pushRow(); i++; continue; }
     if (ch === "\n") { pushField(); pushRow(); i++; continue; }
-
     field += ch; i++;
   }
   pushField();
   if (row.length > 1 || (row.length === 1 && row[0].trim() !== "")) pushRow();
-
   return rows.filter(r => r.some(c => String(c).trim() !== ""));
 }
 
-// ---------- Grid parser (CSV only) ----------
 function parseGrid(text) {
-  if (!text) return { rows: [], inferred: {} };
-
-  if (/\t/.test(text)) {
-    throw new Error("It looks like you pasted tab-separated data. Please paste CSV (comma-separated).");
-  }
-
-  const matrix = parseCsv(text);
-  if (!matrix.length) return { rows: [], inferred: {} };
-
-  const headerCells = matrix[0].map(clean);
-  const headerKeys  = headerCells.map(keyify);
-  const headerish   = headerKeys.some(k => KNOWN_HEADERS.includes(k));
-
-  // default positional mapping if no header row detected
-  const positional = ["unit_code", "unit_name", "unit_description", "unit_type", "group_label"];
-
-  let startIdx = 0;
-  let mapping = positional;
-
-  if (headerish) {
-    const mapHeader = (k) => {
-      if (k === "unit_code") return "unit_code";
-      if (k === "unit_name") return "unit_name";
-      if (k === "unit_description") return "unit_description";
-      if (k === "unit_type") return "unit_type";
-      if (k === "group_label") return "group_label";
-      if (k === "rto_code") return "rto_code";
-      if (k === "qualification_code") return "qualification_code";
-      // NOTE: "qualification_name" intentionally ignored for DB writes
+    if (!text) return { rows: [], inferred: {} };
+    if (/\t/.test(text)) throw new Error("Tab-separated data detected. Please paste CSV data.");
+  
+    const matrix = parseCsv(text);
+    if (matrix.length < 2) return { rows: [], inferred: {} };
+  
+    const headerKeys = matrix[0].map(keyify);
+    
+    const mapping = headerKeys.map(k => {
+      if (["qualification_code"].includes(k)) return "qualification_code";
+      if (["qualification_variation"].includes(k)) return "qualification_variation";
+      if (["unit_code"].includes(k)) return "unit_code";
+      if (["unit_description"].includes(k)) return "unit_name";
+      if (["put_application_details_here"].includes(k)) return "application_details";
+      if (["unit_name"].includes(k)) return "unit_name";
+      if (["unit_type"].includes(k)) return "unit_type";
+      if (["group_label", "cluster_info"].includes(k)) return "group_label";
       return null;
+    });
+  
+    const outRows = matrix.slice(1).map(cols => {
+      const obj = {};
+      mapping.forEach((field, j) => {
+        if (field && cols[j] !== undefined) {
+          obj[field] = clean(cols[j]);
+        }
+      });
+      
+      const ut = (obj.unit_type || "").toLowerCase();
+      obj.unit_type = ut.includes("elective") ? "elective" : "core";
+  
+      return { ...EMPTY_ROW, ...obj };
+    }).filter(r => r.unit_code || r.unit_name);
+  
+    const firstRowWithData = outRows.find(r => r.qualification_code) || {};
+    const inferred = {
+      qualification_code: firstRowWithData.qualification_code || "",
+      qualification_name: firstRowWithData.qualification_name || ""
     };
-    mapping = headerKeys.map(mapHeader);
-    startIdx = 1;
-
-    // dev aid (header detection)
-    try {
-      console.groupCollapsed("%c[RTO Paste] header detect", "color:#6b7280");
-      console.info("header cells:", headerCells);
-      console.info("header keys :", headerKeys);
-      console.info("mapping     :", mapping);
-      console.groupEnd();
-    } catch (err) { console.error("Logging error:", err); }
-  } else {
-    try {
-      console.groupCollapsed("%c[RTO Paste] no header detected — using positional mapping", "color:#6b7280");
-      console.info("positional mapping:", positional);
-      console.groupEnd();
-    } catch (err){console.error("Logging error:", err);}
-  }
-
-  const outRows = [];
-  for (let i = startIdx; i < matrix.length; i++) {
-    const cols = matrix[i];
-    const obj = { ...EMPTY_ROW };
-    for (let j = 0; j < cols.length; j++) {
-      const field = mapping[j] || null;
-      if (!field) continue;
-      obj[field] = clean(cols[j]);
-    }
-    const ut = (obj.unit_type || "").toLowerCase();
-    obj.unit_type = ut.includes("elective") ? "elective" : "core";
-
-    if (obj.unit_code || obj.unit_name || obj.unit_description) outRows.push(obj);
-  }
-
-  // show what we parsed vs. raw matrix (first 10 to avoid noise)
-  try {
-    console.groupCollapsed("%c[RTO Paste] parseGrid result", "color:#2563eb");
-    console.info("matrix rows:", matrix.length, "startIdx:", startIdx);
-    console.table(matrix.slice(0, 10));
-    console.info("outRows:", outRows.length);
-    console.table(outRows.slice(0, 10));
-    console.groupEnd();
-  } catch (err) { console.error("Logging error:", err); }
-
-  const inferred = {
-    rto_code: outRows.find(r => r.rto_code)?.rto_code || "",
-    qualification_code: outRows.find(r => r.qualification_code)?.qualification_code || "",
-  };
-
-  return { rows: outRows, inferred };
+  
+    return { rows: outRows, inferred };
 }
 
+// --- COMPONENT ---
 export default function RtoOfferBuilderPaste() {
   const [rtos, setRtos] = useState([]);
   const [rtoId, setRtoId] = useState("");
-
   const [qCode, setQCode] = useState("");
   const [qName, setQName] = useState("");
-
   const [rows, setRows] = useState([{ ...EMPTY_ROW }]);
   const [saving, setSaving] = useState(false);
   const [log, setLog] = useState([]);
@@ -174,515 +109,252 @@ export default function RtoOfferBuilderPaste() {
   useEffect(() => {
     try {
       const cached = JSON.parse(localStorage.getItem(LS_KEY) || "{}");
-      if (cached?.rtoId) setRtoId(cached.rtoId);
-      if (cached?.qCode) setQCode(cached.qCode);
-      if (cached?.qName) setQName(cached.qName);
-      if (Array.isArray(cached?.rows) && cached.rows.length) setRows(cached.rows);
-      if (Array.isArray(cached?.log)) setLog(cached.log);
-      if (typeof cached?.pasteText === "string") setPasteText(cached.pasteText);
-    } catch (err) { console.error("Logging error:", err); }
+      if (cached) {
+        setRtoId(cached.rtoId || "");
+        setQCode(cached.qCode || "");
+        setQName(cached.qName || "");
+        setRows(Array.isArray(cached.rows) && cached.rows.length ? cached.rows : [{ ...EMPTY_ROW }]);
+        setLog(cached.log || []);
+        setPasteText(cached.pasteText || "");
+      }
+    } catch (err) { console.error("Error loading from localStorage:", err); }
   }, []);
 
   const persist = (patch) => {
     try {
       const prev = JSON.parse(localStorage.getItem(LS_KEY) || "{}");
       localStorage.setItem(LS_KEY, JSON.stringify({ ...prev, ...patch }));
-    } catch (err) { console.error("Logging error:", err); }
+    } catch (err) { console.error("Error persisting to localStorage:", err); }
   };
-
+  
   const addLog = (msg) => {
     const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
     setLog((L) => { const next = [...L, line]; persist({ log: next }); return next; });
-    try { console.log(line); } catch (err) { console.error("Logging error:", err); }
+    console.log(line);
   };
 
   useEffect(() => {
-    supabase
-      .from("rtos")
-      .select("id, trading_name, rto_code")
-      .order("trading_name")
+    supabase.from("rtos").select("id, trading_name, rto_code").order("trading_name")
       .then(({ data }) => setRtos(data || []));
   }, []);
 
-  const selectedRto = useMemo(() => rtos.find((r) => r.id === rtoId), [rtos, rtoId]);
+  async function applyPaste(text) {
+    try {
+      const { rows: parsedRows, inferred } = parseGrid(text);
+      if (!parsedRows.length) {
+        addLog("No valid data rows were parsed from the pasted text.");
+        return;
+      }
+      
+      setRows(parsedRows);
+      persist({ rows: parsedRows });
+      addLog(`Pasted and parsed ${parsedRows.length} rows.`);
 
-  async function prefillQualificationName(code) {
-    const codeUC = normCode(code);
-    if (!codeUC) return;
-    const { data } = await supabase
-      .from("qualifications")
-      .select("name")
-      .eq("code", codeUC)
-      .maybeSingle();
-    if (data?.name) {
-      setQName(data.name);
-      persist({ qName: data.name });
-      addLog(`Prefilled qualification name: ${data.name}`);
+      if (inferred.qualification_code && !qCode) {
+        setQCode(inferred.qualification_code);
+        persist({ qCode: inferred.qualification_code });
+      }
+      if (inferred.qualification_name && !qName) {
+        setQName(inferred.qualification_name);
+        persist({ qName: inferred.qualification_name });
+      }
+
+    } catch (err) {
+      alert(err.message);
+      addLog(`Error parsing pasted text: ${err.message}`);
     }
   }
-  async function maybePrefillQualificationName() {
-    if (!normCode(qCode) || norm(qName)) return;
-    await prefillQualificationName(qCode);
-  }
-
+  
   async function pasteFromClipboard() {
     try {
       const text = await navigator.clipboard.readText();
-      if (!text) return;
-      setPasteText(text); persist({ pasteText: text });
-      try {
-        console.groupCollapsed("%c[RTO Paste] from clipboard", "color:#16a34a");
-        console.info("text length:", text.length);
-        console.info("preview:", text.slice(0, 200).replace(/\n/g,"⏎"));
-        console.groupEnd();
-      } catch (err){console.error("Logging error:", err);}
-      applyPaste(text);
+      if (text) {
+        setPasteText(text);
+        persist({ pasteText: text });
+        applyPaste(text);
+      }
     } catch {
-      alert("Clipboard read blocked by browser. Paste into the area manually.");
+      alert("Clipboard read failed. Please paste the content into the text area manually.");
     }
   }
 
-  function applyPaste(text) {
-    try {
-      const parsed = parseGrid(text);
-      let nextRows = parsed?.rows || [];
-      if (!nextRows.length) { addLog("Nothing parsed from pasted CSV."); return; }
-
-      if (parsed.inferred?.qualification_code && !norm(qCode)) {
-        setQCode(parsed.inferred.qualification_code);
-        persist({ qCode: parsed.inferred.qualification_code });
-        if (!norm(qName)) prefillQualificationName(parsed.inferred.qualification_code);
-      }
-
-      nextRows = nextRows.map(r => ({
-        unit_code: normCode(r.unit_code),
-        unit_name: norm(r.unit_name),
-        unit_description: norm(r.unit_description),
-        unit_type: (r.unit_type || "core").toLowerCase() === "elective" ? "elective" : "core",
-        group_label: norm(r.group_label),
-      }));
-
-      // log what will actually be set into state
-      try {
-        console.groupCollapsed("%c[RTO Paste] normalized rows", "color:#0ea5e9");
-        console.info("count:", nextRows.length);
-        console.table(nextRows.slice(0, 20));
-        console.groupEnd();
-      } catch (err){console.error("Logging error:", err);}
-
-      setRows(nextRows);
-      persist({ rows: nextRows });
-
-      // quick debug: show first few unit_codes so we see if we parsed them
-      addLog(`Pasted ${nextRows.length} row(s). First unit_codes: ${nextRows.slice(0,3).map(r=>r.unit_code||"(blank)").join(", ")}`);
-    } catch (err) {
-      alert(err.message || "Could not parse CSV. Please ensure it’s comma-separated (no tabs).");
-    }
-  }
-
-  function onTableChange(idx, key, val) {
-    const next = rows.map((r, i) => i === idx ? { ...r, [key]: val } : r);
-    setRows(next); persist({ rows: next });
-  }
-
-  function removeRow(idx) {
-    const next = rows.filter((_, i) => i !== idx);
-    setRows(next.length ? next : [{ ...EMPTY_ROW }]);
-    persist({ rows: next.length ? next : [{ ...EMPTY_ROW }] });
-  }
-
-  function clearGrid() {
-    setRows([{ ...EMPTY_ROW }]);
-    persist({ rows: [{ ...EMPTY_ROW }] });
-  }
-
-  function bulkFixes(action) {
-    if (action === "uppercase_codes") {
-      const next = rows.map(r => ({ ...r, unit_code: normCode(r.unit_code) }));
-      setRows(next); persist({ rows: next }); return;
-    }
-    if (action === "set_core") {
-      const next = rows.map(r => ({ ...r, unit_type: "core" }));
-      setRows(next); persist({ rows: next }); return;
-    }
-    if (action === "set_elective") {
-      const next = rows.map(r => ({ ...r, unit_type: "elective" }));
-      setRows(next); persist({ rows: next }); return;
-    }
-    if (action === "drop_empty") {
-      const next = rows.filter(r => norm(r.unit_code) || norm(r.unit_name) || norm(r.unit_description));
-      setRows(next.length ? next : [{ ...EMPTY_ROW }]); persist({ rows: next }); return;
-    }
-  }
-
-  function isValidRow(r) { return !!norm(r.unit_code); }
-
-  async function onSave() {
-    // RTO is optional now — we can save qualification + units without it
-    const code = normCode(qCode);
-    const name = norm(qName) || code;
-    if (!code) return alert("Qualification code is required.");
-
-    const validRows = rows.map(r => ({
-      unit_code: normCode(r.unit_code),
-      unit_name: norm(r.unit_name),
-      unit_description: norm(r.unit_description),
-      unit_type: (r.unit_type || "core").toLowerCase() === "elective" ? "elective" : "core",
-      group_label: norm(r.group_label),
-    })).filter(isValidRow);
-
-    if (!validRows.length) {
-      try {
-        console.groupCollapsed("%c[RTO Paste] save blocked — no validRows", "color:#ef4444");
-        console.info("rows in state:", rows.length);
-        console.table(rows.slice(0, 30));
-        console.groupEnd();
-      } catch (err){console.error("Logging error:", err);}
-      if (!confirm("No valid unit rows (unit_code missing). Continue and save only the qualification?")) {
+  const onSave = async () => {
+    const baseQualCode = normCode(qCode);
+    if (!baseQualCode) {
+        alert("Qualification Code is required.");
         return;
-      }
+    }
+
+    const baseQualName = norm(qName) || baseQualCode;
+    const validRows = rows.filter(r => norm(r.unit_code));
+
+    if (validRows.length === 0) {
+        alert("No valid rows with unit codes to save.");
+        return;
     }
 
     setSaving(true);
-    addLog(`Saving: QUAL=${code}, rows=${validRows.length}${rtoId ? `, RTO=${selectedRto?.trading_name || rtoId}` : " (no RTO yet)"}`);
-    try {
-      console.groupCollapsed("%c[RTO Paste] saving payload", "color:#7c3aed");
-      console.info("qualification:", { code, name });
-      console.table(validRows.slice(0, 50));
-      console.groupEnd();
-    } catch (err){console.error("Logging error:", err);}
+    addLog(`Starting save for qualification: ${baseQualCode}`);
 
     try {
-      // 1) upsert qualification
-      let qualification_id = null;
-      const { data: existingQ, error: qErr } = await supabase
-        .from("qualifications")
-        .select("id")
-        .eq("code", code)
-        .maybeSingle();
-      if (qErr) throw qErr;
+        const { data: qualData, error: qualError } = await supabase
+            .from('qualifications')
+            .upsert({ code: baseQualCode, name: baseQualName }, { onConflict: 'code' })
+            .select('id')
+            .single();
+        if (qualError) throw qualError;
+        const qualification_id = qualData.id;
+        addLog(`Upserted qualification '${baseQualCode}'.`);
 
-      if (!existingQ?.id) {
-        const { data: qIns, error: qInsErr } = await supabase
-          .from("qualifications")
-          .insert({ code, name })
-          .select("id")
-          .single();
-        if (qInsErr) throw qInsErr;
-        qualification_id = qIns.id;
-        addLog(`Inserted qualification ${code}`);
-      } else {
-        qualification_id = existingQ.id;
-        if (name) await supabase.from("qualifications").update({ name }).eq("id", qualification_id);
-        addLog(`Using existing qualification ${code}`);
-      }
-
-      // 2) upsert units
-      let unitMap = new Map();
-      if (validRows.length) {
-        const codes = [...new Set(validRows.map(r => r.unit_code))];
-        const { data: uSel, error: uSelErr } = await supabase
-          .from("units")
-          .select("id, code")
-          .in("code", codes);
-        if (uSelErr) throw uSelErr;
-        unitMap = new Map((uSel || []).map(u => [u.code, u]));
-
-        const missing = codes
-          .filter(c => !unitMap.has(c))
-          .map(c => {
-            const src = validRows.find(r => r.unit_code === c);
-            return { code: c, name: src?.unit_name || c, description: src?.unit_description || null };
-          });
-
-        if (missing.length) {
-          const { data: uIns, error: uInsErr } = await supabase
-            .from("units")
-            .insert(missing)
-            .select("id, code");
-          if (uInsErr) throw uInsErr;
-          (uIns || []).forEach(u => unitMap.set(u.code, u));
-          addLog(`Inserted ${uIns?.length || 0} unit(s).`);
+        // **MODIFIED LOGIC**: Only create an offer if an RTO is selected
+        if (rtoId) {
+            const { error: offerError } = await supabase
+                .from('rto_qualification_offers')
+                .upsert({ rto_id: rtoId, qualification_id: qualification_id }, { onConflict: 'rto_id,qualification_id' });
+            if (offerError) throw offerError;
+            addLog(`Upserted RTO offer for qualification.`);
         } else {
-          addLog("No new units to insert.");
-        }
-      }
-
-      // 3) link qualification_units
-      if (validRows.length) {
-        const candidateLinks = [];
-        const seen = new Set();
-        for (const r of validRows) {
-          const u = unitMap.get(r.unit_code);
-          if (!u?.id) continue;
-          const key = `${qualification_id}:${u.id}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          candidateLinks.push({
-            qualification_id,
-            unit_id: u.id,
-            unit_type: r.unit_type,
-            group_code: r.group_label || null,
-          });
+            addLog(`No RTO selected. Skipping offer creation.`);
         }
 
-        if (candidateLinks.length) {
-          const { data: existingLinks, error: exErr } = await supabase
-            .from("qualification_units")
-            .select("qualification_id, unit_id")
-            .eq("qualification_id", qualification_id);
-          if (exErr) throw exErr;
-
-          const exSet = new Set((existingLinks || []).map(x => `${x.qualification_id}:${x.unit_id}`));
-          const toInsert = candidateLinks.filter(x => !exSet.has(`${x.qualification_id}:${x.unit_id}`));
-          if (toInsert.length) {
-            const { error: linkErr } = await supabase.from("qualification_units").insert(toInsert);
-            if (linkErr) throw linkErr;
-            addLog(`Linked ${toInsert.length} unit(s).`);
-          } else {
-            addLog("All unit links already existed.");
-          }
+        const unitsToUpsert = validRows.map(r => ({
+            code: normCode(r.unit_code),
+            name: norm(r.unit_name) || normCode(r.unit_code),
+            description: norm(r.application_details)
+        }));
+        const uniqueUnits = Array.from(new Map(unitsToUpsert.map(u => [u.code, u])).values());
+        
+        if (uniqueUnits.length > 0) {
+            const { error: unitError } = await supabase.from('units').upsert(uniqueUnits, { onConflict: 'code' });
+            if (unitError) throw unitError;
+            addLog(`Upserted ${uniqueUnits.length} unique units.`);
         }
-      }
+        
+        const { data: unitIdData, error: unitIdError } = await supabase.from('units').select('id, code').in('code', uniqueUnits.map(u => u.code));
+        if (unitIdError) throw unitIdError;
+        const unitIdMap = new Map(unitIdData.map(u => [u.code, u.id]));
 
-      // 4) ensure rto_qualification_offers — only if an RTO is chosen
-      if (rtoId) {
-        const { data: exOffer, error: exOfferErr } = await supabase
-          .from("rto_qualification_offers")
-          .select("rto_id, qualification_id")
-          .eq("rto_id", rtoId)
-          .eq("qualification_id", qualification_id)
-          .maybeSingle();
-        if (exOfferErr) throw exOfferErr;
-
-        if (!exOffer) {
-          const { error: insOfferErr } = await supabase
-            .from("rto_qualification_offers")
-            .insert({ rto_id: rtoId, qualification_id, status: "draft", is_public: false });
-          if (insOfferErr) throw insOfferErr;
-          addLog("Created rto_qualification_offers (draft).");
-        } else {
-          addLog("Offer already exists (skipped).");
+        const qualUnitsToLink = Array.from(new Set(validRows.map(r => normCode(r.unit_code)))).map(unitCode => {
+            const row = validRows.find(r => normCode(r.unit_code) === unitCode);
+            return {
+                qualification_id,
+                unit_id: unitIdMap.get(unitCode),
+                unit_type: row?.unit_type || 'core',
+                group_code: norm(row?.group_label) || null,
+                application_details: norm(row?.application_details) || null
+            };
+        }).filter(link => link.unit_id);
+        
+        if(qualUnitsToLink.length > 0) {
+            const { error: qualUnitError } = await supabase.from('qualification_units').upsert(qualUnitsToLink, { onConflict: 'qualification_id,unit_id' });
+            if (qualUnitError) throw qualUnitError;
+            addLog(`Linked ${qualUnitsToLink.length} units to base qualification with application details.`);
         }
-      } else {
-        addLog("Skipped creating offer: no RTO selected yet.");
-      }
 
-      addLog("✅ Saved successfully.");
-      alert("Saved successfully!");
-    } catch (e) {
-      console.error(e);
-      addLog("❌ Save failed: " + (e?.message || String(e)));
-      alert("Save failed: " + (e?.message || String(e)));
+        const variations = new Map();
+        validRows.forEach(r => {
+            const variationName = norm(r.qualification_variation);
+            const unitCode = normCode(r.unit_code);
+            if(variationName && unitCode) {
+                if(!variations.has(variationName)) variations.set(variationName, []);
+                variations.get(variationName).push(unitCode);
+            }
+        });
+
+        if (variations.size > 0) {
+            const streamsToUpsert = Array.from(variations.keys()).map(name => ({ qualification_id, name }));
+            const { data: streamData, error: streamError } = await supabase.from('qualification_streams').upsert(streamsToUpsert, { onConflict: 'qualification_id,name' }).select('id, name');
+            if (streamError) throw streamError;
+            addLog(`Upserted ${streamData.length} qualification streams (variations).`);
+            const streamIdMap = new Map(streamData.map(s => [s.name, s.id]));
+
+            const streamUnitsToLink = [];
+            variations.forEach((unitCodes, streamName) => {
+                const stream_id = streamIdMap.get(streamName);
+                if (stream_id) {
+                    unitCodes.forEach(unitCode => {
+                        const unit_id = unitIdMap.get(unitCode);
+                        if(unit_id) {
+                            streamUnitsToLink.push({ stream_id, unit_id });
+                        }
+                    });
+                }
+            });
+
+            if (streamUnitsToLink.length > 0) {
+                const { error: streamUnitError } = await supabase.from('qualification_stream_units').upsert(streamUnitsToLink, { onConflict: 'stream_id,unit_id' });
+                if (streamUnitError) throw streamUnitError;
+                addLog(`Linked ${streamUnitsToLink.length} units to streams.`);
+            }
+        }
+        
+        addLog("✅ Save successful!");
+        alert("Save successful!");
+
+    } catch (error) {
+        console.error("Save failed:", error);
+        addLog(`❌ SAVE FAILED: ${error.message}`);
+        alert(`An error occurred: ${error.message}`);
     } finally {
-      setSaving(false);
+        setSaving(false);
     }
-  }
+  };
 
-  const counts = useMemo(() => {
-    const codes = new Set(rows.map(r => normCode(r.unit_code)).filter(Boolean));
-    const core = rows.filter(r => (r.unit_type || "core") === "core").length;
-    const elec = rows.length - core;
-    return { rowCount: rows.length, codeCount: codes.size, core, elec };
-  }, [rows]);
-
-  // SAFER NORMALIZE (no CSV round-trip)
-  function normalizeGrid() {
-    if (!rows.length) return;
-    const next = rows.map(r => ({
-      unit_code: normCode(r.unit_code),
-      unit_name: norm(r.unit_name),
-      unit_description: norm(r.unit_description),
-      unit_type: (r.unit_type || "core").toLowerCase() === "elective" ? "elective" : "core",
-      group_label: norm(r.group_label),
-    }));
-    try {
-      console.groupCollapsed("%c[RTO Paste] normalize (in-memory)", "color:#10b981");
-      console.info("before:", rows.length);
-      console.table(rows.slice(0, 10));
-      console.info("after:", next.length);
-      console.table(next.slice(0, 10));
-      console.groupEnd();
-    } catch (err){console.error("Logging error:", err);}
-    setRows(next);
-    persist({ rows: next });
-  }
+  const saveButtonText = rtoId ? "Save Offer & Variations" : "Save Qualification";
 
   return (
     <div className="card" style={{ display: "grid", gap: 12 }}>
-      <h3 className="section-title">Build RTO Offer (Paste from Spreadsheet)</h3>
+      <h3 className="section-title">Build Qualification or Offer (Paste from Spreadsheet)</h3>
 
-      {/* RTO + Qualification */}
       <div className="card" style={{ display: "grid", gap: 8 }}>
         <div>
-          <label className="label">RTO</label>
-          <select value={rtoId} onChange={(e) => { setRtoId(e.target.value); persist({ rtoId: e.target.value }); }}>
-            <option value="">Select RTO…</option>
-            {rtos.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.trading_name} {r.rto_code ? `(RTO ${r.rto_code})` : ""}
-              </option>
-            ))}
-          </select>
+            <label className="label">RTO (Optional)</label>
+            <select value={rtoId} onChange={(e) => { setRtoId(e.target.value); persist({ rtoId: e.target.value }); }}>
+                <option value="">Select an RTO to create a specific offer...</option>
+                {rtos.map((r) => (
+                <option key={r.id} value={r.id}>
+                    {r.trading_name} {r.rto_code ? `(RTO ${r.rto_code})` : ""}
+                </option>
+                ))}
+            </select>
         </div>
 
         <div style={{ display: "grid", gap: 8, gridTemplateColumns: "1fr 2fr" }}>
           <div>
             <label className="label">Qualification Code</label>
-            <input
-              type="text"
-              value={qCode}
-              onChange={(e) => { setQCode(e.target.value); persist({ qCode: e.target.value }); }}
-              onBlur={maybePrefillQualificationName}
-              placeholder="e.g., BSB30120"
-            />
+            <input type="text" value={qCode} onChange={(e) => { setQCode(e.target.value); persist({ qCode: e.target.value }); }} placeholder="e.g., AUR30320" />
           </div>
           <div>
-            <label className="label">Qualification Name</label>
-            <input
-              type="text"
-              value={qName}
-              onChange={(e) => { setQName(e.target.value); persist({ qName: e.target.value }); }}
-              placeholder="e.g., Certificate III in Business"
-            />
+            <label className="label">Qualification Name (Fallback)</label>
+            <input type="text" value={qName} onChange={(e) => { setQName(e.target.value); persist({ qName: e.target.value }); }} placeholder="Name from CSV will be used if present" />
           </div>
         </div>
       </div>
 
-      {/* Paste helpers */}
       <div className="card" style={{ display: "grid", gap: 8 }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <button className="btn" type="button" onClick={pasteFromClipboard}>📋 Paste from clipboard</button>
-          <button className="btn" type="button" onClick={() => applyPaste(pasteText)}>Apply paste</button>
-          <button className="btn" type="button" onClick={() => { setPasteText(""); persist({ pasteText: "" }); }}>Clear paste box</button>
-          <span className="muted">
-            Tip: Paste <strong>CSV (comma-separated)</strong>. Columns:
-            <code> unit_code, unit_name, unit_description, unit_type, group_label </code>.
-            Optional headers we detect: <code>qualification_code</code>, <code>rto_code</code>.
-            Quoted fields & multi-line descriptions are supported.
-          </span>
+            <button className="btn" type="button" onClick={pasteFromClipboard}>📋 Paste from clipboard</button>
+            <span className="muted">CSV Headers should include: Qualification Code, qualification_variation, Unit code, Unit Name, Put application details here, Unit Type</span>
         </div>
         <textarea
-          rows={6}
-          placeholder={`Paste CSV from Google Sheets/Excel...\n(Commas + quotes supported. Headers optional.)`}
-          value={pasteText}
-          onChange={(e) => { setPasteText(e.target.value); persist({ pasteText: e.target.value }); }}
-          onBlur={() => { if (pasteText?.trim()) applyPaste(pasteText); }}   // auto-apply on blur
-          style={{ width: "100%", fontFamily: "monospace" }}
+            rows={8}
+            placeholder="Paste CSV content here..."
+            value={pasteText}
+            onChange={(e) => { setPasteText(e.target.value); persist({ pasteText: e.target.value }); }}
+            onBlur={() => { if (pasteText?.trim()) applyPaste(pasteText); }}
+            style={{ width: "100%", fontFamily: "monospace" }}
         />
       </div>
 
-      {/* Grid */}
-      <div className="card" style={{ display: "grid", gap: 8 }}>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between" }}>
-          <div>
-            <strong>Rows:</strong> {counts.rowCount} &nbsp;|&nbsp;
-            <strong>Unique Codes:</strong> {counts.codeCount} &nbsp;|&nbsp;
-            <strong>Core:</strong> {counts.core} &nbsp;|&nbsp;
-            <strong>Elective:</strong> {counts.elec}
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn" type="button" onClick={normalizeGrid}>Normalize</button>
-            <button className="btn" type="button" onClick={() => bulkFixes("uppercase_codes")}>Uppercase codes</button>
-            <button className="btn" type="button" onClick={() => bulkFixes("set_core")}>All core</button>
-            <button className="btn" type="button" onClick={() => bulkFixes("set_elective")}>All elective</button>
-            <button className="btn danger" type="button" onClick={clearGrid}>Clear table</button>
-          </div>
-        </div>
+       <div className="card" style={{ display: "grid", gap: 8 }}>
+        <p>{rows.length} row(s) ready to be saved.</p>
+       </div>
 
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", minWidth: 900 }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: "left" }}>unit_code</th>
-                <th style={{ textAlign: "left" }}>unit_name</th>
-                <th style={{ textAlign: "left" }}>unit_description</th>
-                <th style={{ textAlign: "left" }}>unit_type</th>
-                <th style={{ textAlign: "left" }}>group_label</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => {
-                const invalid = !norm(r.unit_code);
-                return (
-                  <tr key={i} style={invalid ? { background: "#fff4f4" } : undefined}>
-                    <td>
-                      <input
-                        value={r.unit_code}
-                        onChange={(e) => onTableChange(i, "unit_code", e.target.value)}
-                        placeholder="e.g., BSBWHS311"
-                        style={{ width: 160 }}
-                      />
-                    </td>
-                    <td>
-                      <input
-                        value={r.unit_name}
-                        onChange={(e) => onTableChange(i, "unit_name", e.target.value)}
-                        placeholder="Unit name"
-                        style={{ width: 280 }}
-                      />
-                    </td>
-                    <td>
-                      <input
-                        value={r.unit_description}
-                        onChange={(e) => onTableChange(i, "unit_description", e.target.value)}
-                        placeholder="(optional)"
-                        style={{ width: 360 }}
-                      />
-                    </td>
-                    <td>
-                      <select
-                        value={r.unit_type}
-                        onChange={(e) => onTableChange(i, "unit_type", e.target.value)}
-                      >
-                        <option value="core">core</option>
-                        <option value="elective">elective</option>
-                      </select>
-                    </td>
-                    <td>
-                      <input
-                        value={r.group_label}
-                        onChange={(e) => onTableChange(i, "group_label", e.target.value)}
-                        placeholder="(optional)"
-                        style={{ width: 160 }}
-                      />
-                    </td>
-                    <td>
-                      <button className="btn danger" type="button" onClick={() => removeRow(i)}>
-                        Remove
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-              {rows.length === 0 && (
-                <tr><td colSpan={6} className="muted">No rows.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Actions */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button className="btn" onClick={onSave} disabled={saving || !qCode}>
-          {saving ? "Saving…" : "Save"}
+        <button className="btn" onClick={onSave} disabled={saving || !qCode || rows.length < 2}>
+          {saving ? "Saving…" : saveButtonText}
         </button>
       </div>
-
-      {/* Context + Log */}
-      {selectedRto ? (
-        <div className="card" style={{ background: "#fafafa" }}>
-          <strong>Selected RTO:</strong> {selectedRto.trading_name}
-          {selectedRto.rto_code ? ` (RTO ${selectedRto.rto_code})` : ""}
-        </div>
-      ) : (
-        <div className="card" style={{ background: "#fff9e6" }}>
-          <strong>No RTO selected.</strong> You can save the qualification and units now,
-          and link an RTO later to create an offer.
-        </div>
-      )}
 
       {log.length > 0 && (
         <div className="card" style={{ background: "#fafafa" }}>
