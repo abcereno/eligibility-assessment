@@ -9,7 +9,7 @@ import { useCompany } from "../hooks/useCompany";
 import { useNavigate } from "react-router-dom";
 import useBranding from "../hooks/useBranding";
 import useRevealOnScroll from "../hooks/useRevealOnScroll";
-import { useQualificationsDataset } from "../hooks/useQualificationsDataset";
+import { useQualificationsDataset } from "../hooks/useQualificationsDataSet";
 import { useRtos } from "../hooks/useRtos";
 import { useChecksExclusive } from "../hooks/useChecksExclusive";
 import { useLocalDraft } from "../hooks/useLocalDraft";
