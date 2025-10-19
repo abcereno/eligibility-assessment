@@ -1,13 +1,7 @@
-// =============================================================
-// File: src/pages/FormPage.jsx
-// Container page wiring hooks + components
-// =============================================================
 import { useMemo, useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
-
 import { useCompany } from "../hooks/useCompany";
 import { useNavigate } from "react-router-dom";
-import useBranding from "../hooks/useBranding";
 import useRevealOnScroll from "../hooks/useRevealOnScroll";
 import { useQualificationsDataset } from "../hooks/useQualificationsDataSet";
 import { useRtos } from "../hooks/useRtos";
@@ -19,366 +13,164 @@ import PersonalDetails from "./PersonalDetails";
 import UnitsTable from "./UnitsTable";
 import SavedAssessments from "./SavedAssessments";
 import PdfPreviewModal from "./PdfPreviewModal";
-import ProgressBar from "./ProgressBar";
 import { useRtoQualificationIndex } from "../hooks/useRtoQualificationIndex";
 
-// --- Webhook Configuration ---
 const LEAD_CONNECTOR_WEBHOOK_URL = "https://services.leadconnectorhq.com/hooks/gU8WTxeySVWZN6JcUGsl/webhook-trigger/20f49e59-0fe1-4334-91ac-9cf4b82c47c8";
+const LS_DRAFT_KEY = "tc.form.v2";
 
-// Helper function to get the current date in the required format
-const getTodayString = () => {
- const today = new Date("2025-10-14T18:11:08-08:00"); // Using provided context time
- const year = today.getFullYear();
- const month = String(today.getMonth() + 1).padStart(2, "0");
- const day = String(today.getDate()).padStart(2, "0");
- return `${year}-${month}-${day}`;
-};
+const getTodayString = () => new Date("2025-10-14T18:11:08-08:00").toISOString().split('T')[0];
 
 export default function FormPage() {
- useRevealOnScroll();
- const { company } = useCompany();
- const nav = useNavigate();
- const { assets, pdf: pdfBrand } = useBranding();
+  useRevealOnScroll();
+  const { company } = useCompany();
+  const nav = useNavigate();
 
- // --- UI State ---
- const [toast, setToast] = useState(null);
- const [modal, setModal] = useState(null);
- const [pdfOpen, setPdfOpen] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [modal, setModal] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
- // --- Navigation & Data Fetching ---
- useEffect(() => {
-  if (!company) nav("/");
- }, [company, nav]);
+  useEffect(() => { if (!company) nav("/"); }, [company, nav]);
 
- const { dataset } = useQualificationsDataset();
- const { byRto, withoutRto } = useRtoQualificationIndex({ dataset, companyId: company?.id });
- const { rtos } = useRtos();
+  const { dataset } = useQualificationsDataset();
+  const { byRto } = useRtoQualificationIndex({ dataset });
+  const { rtos } = useRtos();
 
- // --- Form State ---
- const [date, setDate] = useState(getTodayString());
- const [rtoId, setRtoId] = useState("");
- const [qualificationCode, setQualificationCode] = useState("");
- const [person, setPerson] = useState({ name: "", email: "", phone: "" });
- const [notes, setNotes] = useState("");
- const [workHistory, setWorkHistory] = useState("");
- const [callTranscript, setCallTranscript] = useState("");
+  useEffect(() => { if (dataset && rtos) setIsLoading(false); }, [dataset, rtos]);
 
- const currentQual = useMemo(() => dataset?.[qualificationCode] || null, [dataset, qualificationCode]);
- const allUnits = currentQual?.units || [];
- const unitCount = allUnits.length;
-console.log(currentQual);
-console.log(allUnits);
+  const [date, setDate] = useState(getTodayString());
+  const [rtoId, setRtoId] = useState("");
+  const [qualificationCode, setQualificationCode] = useState("");
+  const [person, setPerson] = useState({ name: "", email: "", phone: "" });
+  const [notes, setNotes] = useState("");
+  const [workHistory, setWorkHistory] = useState("");
+  const [callTranscript, setCallTranscript] = useState("");
 
- useEffect(() => {
-  if (!dataset || !qualificationCode) return;
-  if (!rtoId) {
-   if (!withoutRto.has(qualificationCode)) setQualificationCode("");
-  } else {
-   const allowed = byRto.get(rtoId);
-   if (!allowed?.has(qualificationCode)) setQualificationCode("");
-  }
- }, [rtoId, dataset, byRto, withoutRto, qualificationCode]);
+  // **MODIFIED**: Logic to find the current offer and its units based on the new data structure.
+  const currentOfferId = useMemo(() => {
+    if (!rtoId || !qualificationCode) return null;
+    return byRto.get(rtoId)?.get(qualificationCode) || null;
+  }, [byRto, rtoId, qualificationCode]);
 
- const { checks, setExclusive, resetChecks, evidencePercent, refereePercent, gapPercent } = useChecksExclusive(unitCount);
+  const currentQual = useMemo(() => dataset?.[currentOfferId] || null, [dataset, currentOfferId]);
+  const allUnits = currentQual?.units || [];
+  const unitCount = allUnits.length;
 
- useLocalDraft({
-  seed: { date, rtoId, qualificationCode, person, notes, workHistory, callTranscript, checks },
-  onLoad: (s) => {
-   setDate(s.date || getTodayString());
-   setRtoId(s.rtoId || "");
-   setQualificationCode(s.qualificationCode || "");
-   setPerson(s.person || { name: "", email: "", phone: "" });
-   setNotes(s.notes || "");
-   setWorkHistory(s.workHistory || "");
-   setCallTranscript(s.callTranscript || "");
-   resetChecks(s.checks);
-  },
- });
+  useEffect(() => {
+    if (!dataset || !qualificationCode) return;
+    const rtoHasQual = byRto.get(rtoId)?.has(qualificationCode);
+    if (!rtoHasQual) setQualificationCode("");
+  }, [rtoId, qualificationCode, byRto, dataset]);
 
- const showToast = useCallback((message, type = 'success') => {
-  setToast({ message, type });
-  setTimeout(() => setToast(null), 3500);
- }, []);
+  const { checks, setExclusive, resetChecks, evidencePercent, refereePercent, gapPercent } = useChecksExclusive(unitCount);
 
- const confirmAction = useCallback((message) => {
-  return new Promise((resolve) => {
-   setModal({
-    message,
-    onConfirm: (confirmed) => {
-     setModal(null);
-     resolve(confirmed);
+  useLocalDraft({
+    seed: { date, rtoId, qualificationCode, person, notes, workHistory, callTranscript, checks },
+    onLoad: (s) => {
+      setDate(s.date || getTodayString()); setRtoId(s.rtoId || "");
+      setQualificationCode(s.qualificationCode || "");
+      setPerson(s.person || { name: "", email: "", phone: "" });
+      setNotes(s.notes || ""); setWorkHistory(s.workHistory || "");
+      setCallTranscript(s.callTranscript || ""); resetChecks(s.checks);
     },
-   });
   });
- }, []);
-
- const { saved, saveLocally, deleteSaved, loadSavedIntoForm, saveToDatabase } = useSavedAssessments({
-  getPayload: () => ({
-   name: person.name, email: person.email || "", phone: person.phone || "", date, notes, workHistory, callTranscript,
-   qualification: `${qualificationCode} — ${currentQual?.name || ""}`,
-   qualificationCode, evidenceCodes: Array.from(checks.evidence), refereeCodes: Array.from(checks.referee), gapCodes: Array.from(checks.gap),
-   unitCount, percentageOfEvidence: `${evidencePercent}%`, percentageOfReferee: `${refereePercent}%`, percentageOfGap: `${gapPercent}%`,
-  }),
-  onLoad: (item) => {
-    setPerson((p) => ({ ...p, name: item.name, email: item.email || "", phone: item.phone || "" }));
-    setDate(item.date || getTodayString());
-    setNotes(item.notes || "");
-    setWorkHistory(item.workHistory || "");
-    setCallTranscript(item.callTranscript || "");
-    setQualificationCode(item.qualificationCode || "");
-    resetChecks({
-     evidence: new Set(item.evidenceCodes || []),
-     referee: new Set(item.refereeCodes || []),
-     gap: new Set(item.gapCodes || []),
-    });
-    window.scrollTo({ top: 0, behavior: "smooth" });
-   },
- });
-
- const evidenceList = useMemo(() => allUnits.filter(u => checks.evidence.has(u.code)).map(u => `${u.code}: ${u.name}`), [allUnits, checks.evidence]);
- const refereeList = useMemo(() => allUnits.filter(u => checks.referee.has(u.code)).map(u => `${u.code}: ${u.name}`), [allUnits, checks.referee]);
- const gapList = useMemo(() => allUnits.filter(u => checks.gap.has(u.code)).map(u => `${u.code}: ${u.name}`), [allUnits, checks.gap]);
-
- // --- Actions ---
- const handleSendToWebhook = useCallback(async () => {
-    const confirmed = await confirmAction("Are you sure you want to save this assessment to the CRM?");
-    if (!confirmed) return;
   
+  useEffect(() => {
+    if (rtos?.length && !localStorage.getItem(LS_DRAFT_KEY)) {
+      const generalRto = rtos.find(r => r.trading_name === "General Qualifications");
+      if (generalRto) setRtoId(generalRto.id);
+    }
+  }, [rtos]);
+
+  const showToast = useCallback((message, type = 'success') => {
+    setToast({ message, type }); setTimeout(() => setToast(null), 3500);
+  }, []);
+
+  const confirmAction = useCallback((message) => {
+    return new Promise((resolve) => setModal({ message, onConfirm: (confirmed) => { setModal(null); resolve(confirmed); } }));
+  }, []);
+
+  const { saved, deleteSaved, loadSavedIntoForm, saveToDatabase } = useSavedAssessments({
+    getPayload: () => ({
+      name: person.name, email: person.email || "", phone: person.phone || "", date, notes, workHistory, callTranscript, rtoId,
+      qualification: `${qualificationCode} — ${currentQual?.name || ""}`,
+      qualificationCode, evidenceCodes: [...checks.evidence], refereeCodes: [...checks.referee], gapCodes: [...checks.gap],
+      unitCount, percentageOfEvidence: `${evidencePercent}%`, percentageOfReferee: `${refereePercent}%`, percentageOfGap: `${gapPercent}%`,
+    }),
+    onLoad: (item) => {
+      setPerson(p => ({ ...p, name: item.name, email: item.email || "", phone: item.phone || "" }));
+      setDate(item.date || getTodayString()); setNotes(item.notes || "");
+      setWorkHistory(item.workHistory || ""); setCallTranscript(item.callTranscript || "");
+      setRtoId(item.rtoId || ""); setQualificationCode(item.qualificationCode || "");
+      resetChecks({ evidence: new Set(item.evidenceCodes), referee: new Set(item.refereeCodes), gap: new Set(item.gapCodes) });
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    },
+  });
+
+  const evidenceList = useMemo(() => allUnits.filter(u => checks.evidence.has(u.code)).map(u => `${u.code}: ${u.name}`), [allUnits, checks.evidence]);
+  const refereeList = useMemo(() => allUnits.filter(u => checks.referee.has(u.code)).map(u => `${u.code}: ${u.name}`), [allUnits, checks.referee]);
+  const gapList = useMemo(() => allUnits.filter(u => checks.gap.has(u.code)).map(u => `${u.code}: ${u.name}`), [allUnits, checks.gap]);
+
+  const handleAction = async (actionFn, successMsg, errorMsg) => {
     if (!person.name?.trim() || !date || !qualificationCode) {
-     return showToast("Name, Date, and Qualification are required to save to CRM.", "error");
+      return showToast("Name, Date, and Qualification are required.", "error");
     }
-  
-    const [year, month, day] = date.split('-');
-    const formattedDate = `${day}-${month}-${year}`;
-  
-    const payload = {
-     name: person.name, email: person.email, phone: person.phone, date: formattedDate, notes: notes,
-     workHistory: workHistory, callTranscript: callTranscript,
-     qualification: `${qualificationCode} — ${currentQual?.name || ""}`,
-     unitCount: unitCount,
-     percentageOfEvidence: `${evidencePercent}%`, percentageOfReferee: `${refereePercent}%`, percentageOfGap: `${gapPercent}%`,
-     unitsEvidenceList: evidenceList.join('\n'), unitsRefereeList: refereeList.join('\n'), unitsGapList: gapList.join('\n'),
-     evidenceCount: evidencePercent, refereeCount: refereePercent, gapCount: gapPercent,
-    };
-  
-    showToast("Sending to CRM...");
-  
-    try {
-     const response = await fetch(LEAD_CONNECTOR_WEBHOOK_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-     });
-  
-     if (response.ok) {
-      showToast("Assessment saved to CRM successfully!");
-     } else {
-      showToast("Error sending data to CRM.", "error");
-     }
-    } catch (error) {
-     console.error("Webhook error:", error);
-     showToast("A network error occurred while sending data.", "error");
-    }
-   }, [
-    person, date, qualificationCode, currentQual, notes, workHistory, callTranscript,
-    unitCount, evidencePercent, refereePercent, gapPercent,
-    evidenceList, refereeList, gapList,
-    showToast, confirmAction
-   ]);
-  
-   const handleDatabaseSave = useCallback(async () => {
-    const confirmed = await confirmAction("Are you sure you want to save to the database backup?");
+    const confirmed = await confirmAction(`Are you sure you want to ${successMsg.toLowerCase()}?`);
     if (!confirmed) return;
-  
-    if (!person.name?.trim() || !date || !qualificationCode) {
-     return showToast("Name, Date, and Qualification are required to save.", "error");
-    }
-  
+
+    setIsSubmitting(true);
+    showToast("Processing...");
     try {
-     await saveToDatabase();
-     showToast("Assessment saved to database backup.");
+      await actionFn();
+      showToast(successMsg);
     } catch (err) {
-     showToast(`Failed to save to database: ${err.message}`, "error");
-     console.error(err);
+      showToast(errorMsg + `: ${err.message}`, "error");
+      console.error(err);
+    } finally {
+      setIsSubmitting(false);
     }
-   }, [saveToDatabase, showToast, confirmAction, person.name, date, qualificationCode]);
-  
-   const onResetForm = useCallback(async () => {
-    const confirmed = await confirmAction("Are you sure you want to clear the entire form? This cannot be undone.");
-    if (!confirmed) return;
-  
-    setDate(getTodayString());
-    setRtoId("");
-    setQualificationCode("");
-    setPerson({ name: "", email: "", phone: "" });
-    setNotes("");
-    setWorkHistory("");
-    setCallTranscript("");
-    resetChecks();
-    localStorage.removeItem("tc.form.v2");
-    showToast("Form cleared.");
-   }, [resetChecks, showToast, confirmAction]);
-  
-   const handleOpenPdf = () => {
-    if (!person.name?.trim() || !date || !qualificationCode) {
-     return showToast("Name, Date and Qualification are required to generate PDF.", "error");
-    }
-    setPdfOpen(true);
-   };
-  
-   return (
-    <>
-     <div className="grid" style={{ gridTemplateColumns: "1fr" }}>
-      <div className="card reveal">
-       <h2 className="section-title">Personal Details</h2>
-       <PersonalDetails person={person} setPerson={setPerson} notes={notes} setNotes={setNotes} workHistory={workHistory} setWorkHistory={setWorkHistory} callTranscript={callTranscript} setCallTranscript={setCallTranscript} />
-      </div>
-     
-      <div className="card reveal">
-       <h1 className="section-title">Skills & Eligibility Assessment</h1>
-       <MetaPickers
-        date={date} setDate={setDate} rtoId={rtoId} setRtoId={setRtoId}
-        rtos={rtos} dataset={dataset} rtoIndex={{ byRto, withoutRto }}
-        qualificationCode={qualificationCode}
-        onQualificationChange={(val) => {
-         setQualificationCode(val);
-         resetChecks();
-        }}
-        unitCount={unitCount} evidencePercent={evidencePercent} refereePercent={refereePercent} gapPercent={gapPercent}
-       />
-      </div>
-  
-<div className="card reveal">
-  {currentQual ? (
-    <>
-      
-      <h2 className="section-title">{currentQual.code} — {currentQual.name}</h2>
-      {/* Updated Stats Grid */}
-<div className="progress-card" style={{ marginBottom: 24 }}>
-  <div className="stat-box">
-    <div className="stat-box-content">
-      <div className="stat-label">Total Units</div>
-      <div className="stat-value">{unitCount}</div>
-    </div>
-    {/* The water-fill element */}
-    <div className="water-fill" style={{ top: `calc(100% - 100%)` }}></div>
-  </div>
-  <div className="stat-box">
-    <div className="stat-box-content">
-      <div className="stat-label">Evidence Progress</div>
-      <div className="stat-value">{evidencePercent}%</div>
-    </div>
-    {/* The water-fill element */}
-    <div className="water-fill" style={{ top: `calc(100% - ${evidencePercent}%)` }}></div>
-  </div>
-  <div className="stat-box">
-    <div className="stat-box-content">
-      <div className="stat-label">Referee Progress</div>
-      <div className="stat-value">{refereePercent}%</div>
-    </div>
-    {/* The water-fill element */}
-    <div className="water-fill" style={{ top: `calc(100% - ${refereePercent}%)` }}></div>
-  </div>
-  <div className="stat-box">
-    <div className="stat-box-content">
-      <div className="stat-label">Gap Training</div>
-      <div className="stat-value">{gapPercent}%</div>
-    </div>
-    {/* The water-fill element */}
-    <div className="water-fill" style={{ top: `calc(100% - ${gapPercent}%)` }}></div>
-  </div>
-</div>
-
-      <UnitsTable units={allUnits} checks={checks} setExclusive={setExclusive} />
-
-      <div className="grid cols-3" style={{ gap: 12, marginTop: 24 }}>
-        <div className="card">
-          <h4>Evidence Units Selected:</h4>
-          <pre style={{ whiteSpace: "pre-wrap" }}>{evidenceList.join("\n")}</pre>
-        </div>
-        <div className="card">
-          <h4>Referee Units Selected:</h4>
-          <pre style={{ whiteSpace: "pre-wrap" }}>{refereeList.join("\n")}</pre>
-        </div>
-        <div className="card">
-          <h4>Gap Training Units Selected:</h4>
-          <pre style={{ whiteSpace: "pre-wrap" }}>{gapList.join("\n")}</pre>
-        </div>
-      </div>
-    </>
-  ) : null}
-</div>
-  
-      <div className="card reveal" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-       <button className="btn" onClick={handleSendToWebhook}>Save to Lead Connector</button>
-       <button className="btn" onClick={handleDatabaseSave}>Save to Database</button>
-       <button className="btn ghost" onClick={() => {
-         if (person.name && date && qualificationCode) {
-           saveLocally();
-           showToast("Assessment saved locally.");
-         } else {
-           showToast("Name, Date, and Qualification are required to save.", "error");
-         }
-       }}>Save to Local Storage</button>
-       <button className="btn ghost" onClick={handleOpenPdf}>Preview Assessment PDF</button>
-       <button className="btn ghost" onClick={onResetForm}>Clear Form</button>
-      </div>
-  
-      <div className="card reveal">
-       <h2 className="section-title">Saved Assessments (Local)</h2>
-       <SavedAssessments saved={saved} onLoad={loadSavedIntoForm} onDelete={deleteSaved} />
-      </div>
-  
-      {pdfOpen && (
-       <PdfPreviewModal
-        person={person}
-        date={date}
-        qualificationName={`${qualificationCode} — ${currentQual?.name || ""}`}
-        progress={{ evidencePercent, refereePercent, gapPercent }}
-        lists={{ evidenceList, refereeList, gapList }}
-        branding={{ assets, pdfBrand }}
-        onClose={() => setPdfOpen(false)}
-        showToast={showToast}
-       />
-      )}
-     </div>
-    
-     <Toast toast={toast} />
-     <ConfirmationModal modal={modal} />
-    </>
-   );
-  }
-  
-  // --- INLINE UI COMPONENTS ---
-  
-  const Toast = ({ toast }) => {
-   if (!toast) return null;
-   const toastStyle = {
-    position: 'fixed', bottom: '20px', right: '20px',
-    padding: '1rem 1.5rem',
-    backgroundColor: toast.type === 'error' ? '#e74c3c' : '#2ecc71',
-    color: 'white', borderRadius: '8px', boxShadow: '0 5px 15px rgba(0,0,0,0.2)',
-    zIndex: 9999, opacity: 0, transform: 'translateY(20px)', animation: 'toast-in 0.5s forwards',
-   };
-   const keyframes = `@keyframes toast-in { to { opacity: 1; transform: translateY(0); } }`;
-   return createPortal(
-    <><style>{keyframes}</style><div style={toastStyle}>{toast.message}</div></>,
-    document.body
-   );
   };
   
-  const ConfirmationModal = ({ modal }) => {
-   if (!modal) return null;
-   return createPortal(
-    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 9998 }}>
-     <div style={{ background: 'white', padding: '2rem', borderRadius: '8px', boxShadow: '0 5px 15px rgba(0,0,0,0.3)', textAlign: 'center' }}>
-      <p style={{ marginBottom: '1.5rem', fontSize: '1.1rem' }}>{modal.message}</p>
-      <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
-       <button className="btn ghost" onClick={() => modal.onConfirm(false)}>Cancel</button>
-       <button className="btn" onClick={() => modal.onConfirm(true)}>Confirm</button>
+  const handleSendToWebhook = () => handleAction(
+    async () => {
+      const [year, month, day] = date.split('-');
+      const payload = {
+        name: person.name, email: person.email, phone: person.phone, date: `${day}-${month}-${year}`, notes, workHistory, callTranscript,
+        qualification: `${qualificationCode} — ${currentQual?.name || ""}`, unitCount,
+        percentageOfEvidence: `${evidencePercent}%`, percentageOfReferee: `${refereePercent}%`, percentageOfGap: `${gapPercent}%`,
+        unitsEvidenceList: evidenceList.join('\n'), unitsRefereeList: refereeList.join('\n'), unitsGapList: gapList.join('\n'),
+      };
+      const response = await fetch(LEAD_CONNECTOR_WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!response.ok) throw new Error("Server responded with an error.");
+    },
+    "Saved to CRM successfully!",
+    "Error sending to CRM"
+  );
+  
+  const handleDatabaseSave = () => handleAction(saveToDatabase, "Saved to database backup!", "Failed to save to database");
+  
+  if (isLoading) return <div className="card">Loading assessment data...</div>;
+
+  return (
+    <>
+      <div className="grid" style={{ gridTemplateColumns: "1fr" }}>
+        <div className="card reveal"><h2 className="section-title">Personal Details</h2><PersonalDetails {...{ person, setPerson, notes, setNotes, workHistory, setWorkHistory, callTranscript, setCallTranscript }} /></div>
+        <div className="card reveal"><h1 className="section-title">Skills & Eligibility Assessment</h1><MetaPickers {...{ date, setDate, rtoId, setRtoId, rtos, dataset, rtoIndex: { byRto }, qualificationCode, onQualificationChange: val => { setQualificationCode(val); resetChecks(); }, unitCount, evidencePercent, refereePercent, gapPercent }} /></div>
+        {currentQual && <div className="card reveal">
+            <h2 className="section-title">{currentQual.code} — {currentQual.name}</h2>
+            <UnitsTable units={allUnits} checks={checks} setExclusive={setExclusive} />
+        </div>}
+        <div className="card reveal" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn" onClick={handleSendToWebhook} disabled={isSubmitting}>{isSubmitting ? "Saving..." : "Save to Lead Connector"}</button>
+            <button className="btn" onClick={handleDatabaseSave} disabled={isSubmitting}>{isSubmitting ? "Saving..." : "Save to Database"}</button>
+        </div>
+        <div className="card reveal"><h2 className="section-title">Saved Assessments (Local)</h2><SavedAssessments saved={saved} onLoad={loadSavedIntoForm} onDelete={deleteSaved} /></div>
       </div>
-     </div>
-    </div>,
-    document.body
-   );
-  };
+      <Toast toast={toast} />
+      <ConfirmationModal modal={modal} />
+    </>
+  );
+}
+
+const Toast = ({ toast }) => !toast ? null : createPortal(<div style={{ position: 'fixed', bottom: '20px', right: '20px', padding: '1rem 1.5rem', backgroundColor: toast.type === 'error' ? '#e74c3c' : '#2ecc71', color: 'white', borderRadius: '8px', zIndex: 9999, animation: 'toast-in 0.5s forwards' }}>{toast.message}</div>, document.body);
+const ConfirmationModal = ({ modal }) => !modal ? null : createPortal(<div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 9998 }}><div style={{ background: 'white', padding: '2rem', borderRadius: '8px' }}><p>{modal.message}</p><button onClick={() => modal.onConfirm(false)}>Cancel</button><button onClick={() => modal.onConfirm(true)}>Confirm</button></div></div>, document.body);
