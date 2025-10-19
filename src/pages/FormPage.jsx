@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useCallback } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useCompany } from "../hooks/useCompany";
 import { useNavigate } from "react-router-dom";
@@ -14,21 +14,25 @@ import UnitsTable from "./UnitsTable";
 import SavedAssessments from "./SavedAssessments";
 import PdfPreviewModal from "./PdfPreviewModal";
 import { useRtoQualificationIndex } from "../hooks/useRtoQualificationIndex";
+import { usePdf } from "../hooks/usePdf";
+import ProgressBar from "./ProgressBar";
 
 const LEAD_CONNECTOR_WEBHOOK_URL = "https://services.leadconnectorhq.com/hooks/gU8WTxeySVWZN6JcUGsl/webhook-trigger/20f49e59-0fe1-4334-91ac-9cf4b82c47c8";
 const LS_DRAFT_KEY = "tc.form.v2";
 
-const getTodayString = () => new Date("2025-10-14T18:11:08-08:00").toISOString().split('T')[0];
+const getTodayString = () => new Date().toISOString().split('T')[0];
 
 export default function FormPage() {
   useRevealOnScroll();
   const { company } = useCompany();
   const nav = useNavigate();
+  const pdfRef = useRef();
 
   const [toast, setToast] = useState(null);
   const [modal, setModal] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isPdfPreviewOpen, setIsPdfPreviewOpen] = useState(false);
 
   useEffect(() => { if (!company) nav("/"); }, [company, nav]);
 
@@ -46,7 +50,6 @@ export default function FormPage() {
   const [workHistory, setWorkHistory] = useState("");
   const [callTranscript, setCallTranscript] = useState("");
 
-  // **MODIFIED**: Logic to find the current offer and its units based on the new data structure.
   const currentOfferId = useMemo(() => {
     if (!rtoId || !qualificationCode) return null;
     return byRto.get(rtoId)?.get(qualificationCode) || null;
@@ -90,7 +93,7 @@ export default function FormPage() {
     return new Promise((resolve) => setModal({ message, onConfirm: (confirmed) => { setModal(null); resolve(confirmed); } }));
   }, []);
 
-  const { saved, deleteSaved, loadSavedIntoForm, saveToDatabase } = useSavedAssessments({
+  const { saved, deleteSaved, loadSavedIntoForm, saveToDatabase, saveLocally } = useSavedAssessments({
     getPayload: () => ({
       name: person.name, email: person.email || "", phone: person.phone || "", date, notes, workHistory, callTranscript, rtoId,
       qualification: `${qualificationCode} — ${currentQual?.name || ""}`,
@@ -111,11 +114,19 @@ export default function FormPage() {
   const refereeList = useMemo(() => allUnits.filter(u => checks.referee.has(u.code)).map(u => `${u.code}: ${u.name}`), [allUnits, checks.referee]);
   const gapList = useMemo(() => allUnits.filter(u => checks.gap.has(u.code)).map(u => `${u.code}: ${u.name}`), [allUnits, checks.gap]);
 
+  const { openPdf } = usePdf({
+    person,
+    date,
+    qualificationCode,
+    pdfRef,
+    onRequireFields: () => showToast("Name, Date, and Qualification are required.", "error"),
+  });
+
   const handleAction = async (actionFn, successMsg, errorMsg) => {
     if (!person.name?.trim() || !date || !qualificationCode) {
       return showToast("Name, Date, and Qualification are required.", "error");
     }
-    const confirmed = await confirmAction(`Are you sure you want to ${successMsg.toLowerCase()}?`);
+    const confirmed = await confirmAction(`Are you sure you want to ${successMsg.toLowerCase().replace("!", "")}?`);
     if (!confirmed) return;
 
     setIsSubmitting(true);
@@ -148,6 +159,21 @@ export default function FormPage() {
   );
   
   const handleDatabaseSave = () => handleAction(saveToDatabase, "Saved to database backup!", "Failed to save to database");
+  const handleSaveLocally = () => handleAction(saveLocally, "Saved locally!", "Failed to save locally");
+
+  const handleClearForm = async () => {
+    const confirmed = await confirmAction("Are you sure you want to clear the form? This action cannot be undone.");
+    if (!confirmed) return;
+    setDate(getTodayString());
+    setRtoId("");
+    setQualificationCode("");
+    setPerson({ name: "", email: "", phone: "" });
+    setNotes("");
+    setWorkHistory("");
+    setCallTranscript("");
+    resetChecks();
+    showToast("Form cleared!");
+  };
   
   if (isLoading) return <div className="card">Loading assessment data...</div>;
 
@@ -156,18 +182,66 @@ export default function FormPage() {
       <div className="grid" style={{ gridTemplateColumns: "1fr" }}>
         <div className="card reveal"><h2 className="section-title">Personal Details</h2><PersonalDetails {...{ person, setPerson, notes, setNotes, workHistory, setWorkHistory, callTranscript, setCallTranscript }} /></div>
         <div className="card reveal"><h1 className="section-title">Skills & Eligibility Assessment</h1><MetaPickers {...{ date, setDate, rtoId, setRtoId, rtos, dataset, rtoIndex: { byRto }, qualificationCode, onQualificationChange: val => { setQualificationCode(val); resetChecks(); }, unitCount, evidencePercent, refereePercent, gapPercent }} /></div>
+        
+        {currentQual && (
+        <div className="card reveal progress-card">
+            <div className="stat-box">
+                <div className="water-fill" style={{ top: `${100 - (unitCount > 0 ? 100 : 0)}%` }}></div>
+                <div className="stat-box-content">
+                    <span className="stat-label">Total Units</span>
+                    <span className="stat-value">{unitCount}</span>
+                </div>
+            </div>
+            <div className="stat-box">
+                <div className="water-fill" style={{ top: `${100 - evidencePercent}%` }}></div>
+                <div className="stat-box-content">
+                    <span className="stat-label">Evidence Progress</span>
+                    <span className="stat-value">{checks.evidence.size}</span>
+                </div>
+            </div>
+            <div className="stat-box">
+                <div className="water-fill" style={{ top: `${100 - refereePercent}%` }}></div>
+                <div className="stat-box-content">
+                    <span className="stat-label">Referee Progress</span>
+                    <span className="stat-value">{checks.referee.size}</span>
+                </div>
+            </div>
+            <div className="stat-box">
+                <div className="water-fill" style={{ top: `${100 - gapPercent}%` }}></div>
+                <div className="stat-box-content">
+                    <span className="stat-label">Gap Training</span>
+                    <span className="stat-value">{checks.gap.size}</span>
+                </div>
+            </div>
+        </div>
+        )}
+
         {currentQual && <div className="card reveal">
-            <h2 className="section-title">{currentQual.code} — {currentQual.name}</h2>
+            <h2 className="section-title">{currentQual.code} — ${currentQual.name}</h2>
             <UnitsTable units={allUnits} checks={checks} setExclusive={setExclusive} />
         </div>}
         <div className="card reveal" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="btn" onClick={handleSendToWebhook} disabled={isSubmitting}>{isSubmitting ? "Saving..." : "Save to Lead Connector"}</button>
             <button className="btn" onClick={handleDatabaseSave} disabled={isSubmitting}>{isSubmitting ? "Saving..." : "Save to Database"}</button>
+            <button className="btn" onClick={() => openPdf(setIsPdfPreviewOpen)}>Preview Assessment PDF</button>
+            <button className="btn" onClick={handleSaveLocally} disabled={isSubmitting}>Save Locally</button>
+            <button className="btn" onClick={handleClearForm} disabled={isSubmitting}>Clear Form</button>
         </div>
         <div className="card reveal"><h2 className="section-title">Saved Assessments (Local)</h2><SavedAssessments saved={saved} onLoad={loadSavedIntoForm} onDelete={deleteSaved} /></div>
       </div>
       <Toast toast={toast} />
       <ConfirmationModal modal={modal} />
+      {isPdfPreviewOpen && (
+        <PdfPreviewModal
+          onClose={() => setIsPdfPreviewOpen(false)}
+          showToast={showToast}
+          person={person}
+          date={date}
+          qualificationName={`${qualificationCode} — ${currentQual?.name || ""}`}
+          progress={{ evidencePercent, refereePercent, gapPercent }}
+          lists={{ evidenceList: evidenceList.map(item => item.split(': ')[1]), refereeList: refereeList.map(item => item.split(': ')[1]), gapList: gapList.map(item => item.split(': ')[1]) }}
+        />
+      )}
     </>
   );
 }

@@ -1,10 +1,31 @@
-// =============================================================
-// File: src/refactor/components/UnitsTable.jsx
-// =============================================================
-import React from "react";
+import React, { useMemo } from "react";
 
 
 export default function UnitsTable({ units, checks, setExclusive }) {
+  const sortedUnits = useMemo(() => {
+    return [...units].sort((a, b) => {
+      // Core units first
+      if (a.type === 'core' && b.type !== 'core') {
+        return -1;
+      }
+      if (a.type !== 'core' && b.type === 'core') {
+        return 1;
+      }
+
+      // Then sort by group/cluster name
+      const groupA = a.group || '';
+      const groupB = b.group || '';
+      const groupCompare = groupA.localeCompare(groupB, undefined, { numeric: true });
+
+      if (groupCompare !== 0) {
+        return groupCompare;
+      }
+
+      // Finally, sort by unit code as a tie-breaker
+      return a.code.localeCompare(b.code);
+    });
+  }, [units]);
+
   return (
     <div style={{ overflowX: "auto" }}>
       <table className="qualification-table" style={{ width: "100%", tableLayout: "fixed" }}>
@@ -23,7 +44,7 @@ export default function UnitsTable({ units, checks, setExclusive }) {
           </tr>
         </thead>
         <tbody>
-          {units.map((u) => {
+          {sortedUnits.map((u) => {
             const tga = `https://training.gov.au/Training/Details/${u.code}`;
             const typeLbl = u.type === "core" ? "Core" : u.type === "elective" ? "Elective" : "";
             const groupName = `choice-${u.code}`; // radios with same name => only one per row

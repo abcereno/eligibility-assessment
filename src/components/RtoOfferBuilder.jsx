@@ -62,7 +62,7 @@ function parseGrid(text) {
    return { ...EMPTY_ROW, ...obj };
   }).filter(r => r.unit_code || r.unit_name);
   const firstRowWithData = outRows.find(r => r.qualification_code) || {};
-  return { rows: outRows, inferred: { qualification_code: firstRowWithData.qualification_code || "", qualification_name: firstRowWithData.qualification_name || "" }};
+  return { rows: outRows, inferred: { qualification_code: firstRowWithData.qualification_code || "", qualification_name: firstRowWithData.qualification_name || "", qualification_variation: firstRowWithData.qualification_variation || "" }};
 }
 
 export default function RtoOfferBuilder() {
@@ -70,6 +70,7 @@ export default function RtoOfferBuilder() {
  const [rtoId, setRtoId] = useState("");
  const [qCode, setQCode] = useState("");
  const [qName, setQName] = useState("");
+ const [qVariation, setQVariation] = useState("");
  const [rows, setRows] = useState([EMPTY_ROW]);
  const [saving, setSaving] = useState(false);
  const [log, setLog] = useState([]);
@@ -93,7 +94,7 @@ export default function RtoOfferBuilder() {
   try {
    const cached = JSON.parse(localStorage.getItem(LS_KEY) || "{}");
    if (cached) {
-    setRtoId(cached.rtoId || ""); setQCode(cached.qCode || ""); setQName(cached.qName || "");
+    setRtoId(cached.rtoId || ""); setQCode(cached.qCode || ""); setQName(cached.qName || ""); setQVariation(cached.qVariation || "");
     setRows(Array.isArray(cached.rows) && cached.rows.length ? cached.rows : [EMPTY_ROW]);
     setLog(cached.log || []); setPasteText(cached.pasteText || "");
    }
@@ -118,8 +119,12 @@ export default function RtoOfferBuilder() {
     setQName(inferred.qualification_name); persist({ qName: inferred.qualification_name });
         addLog(`Inferred Qual Name: ${inferred.qualification_name}`);
    }
+   if (inferred.qualification_variation && !qVariation) {
+    setQVariation(inferred.qualification_variation); persist({ qVariation: inferred.qualification_variation });
+        addLog(`Inferred Qual Variation: ${inferred.qualification_variation}`);
+   }
   } catch (err) { alert(err.message); addLog(`❌ Parse Error: ${err.message}`); }
- }, [addLog, persist, qCode, qName]);
+ }, [addLog, persist, qCode, qName, qVariation]);
  
  const pasteFromClipboard = useCallback(async () => {
     setIsPasting(true);
@@ -148,11 +153,21 @@ export default function RtoOfferBuilder() {
       const qualification_id = qualData.id;
       addLog(`Upserted qualification '${baseQualCode}'.`);
 
-      // **MODIFIED**: Use the 'offers' table now.
       const { data: offerData, error: offerError } = await supabase.from('offers').upsert({ rto_id: offerRtoId, qualification_id }, { onConflict: 'rto_id,qualification_id' }).select('id').single();
       if (offerError) throw new Error(`Offer upsert failed: ${offerError.message}`);
       const offer_id = offerData.id;
       addLog(`Got offer ID: ${offer_id}`);
+
+    if (qVariation.trim()) {
+      const { error: streamError } = await supabase
+        .from('offer_streams')
+        .upsert({ offer_id: offer_id, name: qVariation.trim() }, { onConflict: 'offer_id,name' });
+
+      if (streamError) {
+        throw new Error(`Stream upsert failed: ${streamError.message}`);
+      }
+      addLog(`Upserted stream/variation: ${qVariation.trim()}`);
+    }
 
     const unitsToUpsert = validRows.map(r => ({ code: normCode(r.unit_code), name: norm(r.unit_name) || normCode(r.unit_code), description: norm(r.application_details) }));
     const uniqueUnits = [...new Map(unitsToUpsert.map(u => [u.code, u])).values()];
@@ -166,19 +181,17 @@ export default function RtoOfferBuilder() {
     if (unitIdError) throw new Error(`Fetching unit IDs failed: ${unitIdError.message}`);
     const unitIdMap = new Map(unitIdData.map(u => [u.code, u.id]));
 
-      // **MODIFIED**: Delete old units from `offer_units` for this specific offer.
       const { error: deleteError } = await supabase.from('offer_units').delete().match({ offer_id });
       if (deleteError) throw new Error(`Deleting old units failed: ${deleteError.message}`);
       addLog(`Cleared old units for this offer.`);
 
-      // **MODIFIED**: Link units to the offer via `offer_units`.
-    const offerUnitsToLink = validRows.map(row => ({
+    const offerUnitsToLink = [...new Map(validRows.map(row => [row.unit_code, {
           offer_id,
           unit_id: unitIdMap.get(normCode(row.unit_code)),
           unit_type: row.unit_type || 'core',
           group_code: norm(row.group_label) || null,
           application_details: norm(row.application_details) || null
-      })).filter(link => link.unit_id);
+      }])).values()].filter(link => link.unit_id);
     
     if(offerUnitsToLink.length > 0) {
       const { error: offerUnitError } = await supabase.from('offer_units').insert(offerUnitsToLink);
@@ -198,7 +211,7 @@ export default function RtoOfferBuilder() {
   
   const clearForm = () => {
     if(window.confirm("Clear form?")) {
-      setRtoId(""); setQCode(""); setQName(""); setRows([EMPTY_ROW]);
+      setRtoId(""); setQCode(""); setQName(""); setQVariation(""); setRows([EMPTY_ROW]);
       setLog([]); setPasteText(""); localStorage.removeItem(LS_KEY);
       addLog("Form cleared.");
     }
@@ -213,7 +226,7 @@ export default function RtoOfferBuilder() {
           <option value="">Select an RTO (defaults to General)</option>
           {rtos.map(r => <option key={r.id} value={r.id}>{r.trading_name}</option>)}
         </select>
-        <div style={{ display: "grid", gap: 8, gridTemplateColumns: "1fr 2fr" }}>
+        <div style={{ display: "grid", gap: 8, gridTemplateColumns: "1fr 2fr 1fr" }}>
           <div>
             <label className="label">Qualification Code*</label>
             <input type="text" value={qCode} onChange={e => { setQCode(e.target.value); persist({ qCode: e.target.value }); }} placeholder="e.g., AUR30320" required />
@@ -221,6 +234,10 @@ export default function RtoOfferBuilder() {
           <div>
             <label className="label">Qualification Name</label>
             <input type="text" value={qName} onChange={e => { setQName(e.target.value); persist({ qName: e.target.value }); }} placeholder="Inferred from paste" />
+          </div>
+          <div>
+            <label className="label">Variation / Stream</label>
+            <input type="text" value={qVariation} onChange={e => { setQVariation(e.target.value); persist({ qVariation: e.target.value }); }} placeholder="e.g., Electrical" />
           </div>
         </div>
    </div>
