@@ -136,79 +136,114 @@ export default function RtoOfferBuilder() {
     finally { setIsPasting(false); }
  }, [persist, applyPaste, addLog]);
 
- const onSave = async () => {
-  const baseQualCode = normCode(qCode);
+const onSave = async () => {
+    const baseQualCode = normCode(qCode);
     const offerRtoId = rtoId.trim() ? rtoId : rtos.find(r => r.trading_name === "General Qualifications")?.id;
-  if (!baseQualCode || !offerRtoId) { alert("Qualification Code and RTO are required."); return; }
-
-  const validRows = rows.filter(r => norm(r.unit_code));
-  if (validRows.length === 0) { alert("No rows with unit codes to save."); return; }
-
-  setSaving(true);
-  addLog(`🚀 Saving offer for RTO ${offerRtoId} and Qual ${baseQualCode}`);
-
-  try {
-      const { data: qualData, error: qualError } = await supabase.from('qualifications').upsert({ code: baseQualCode, name: norm(qName) || baseQualCode }, { onConflict: 'code' }).select('id').single();
-      if (qualError) throw new Error(`Qual upsert failed: ${qualError.message}`);
-      const qualification_id = qualData.id;
-      addLog(`Upserted qualification '${baseQualCode}'.`);
-
-      const { data: offerData, error: offerError } = await supabase.from('offers').upsert({ rto_id: offerRtoId, qualification_id }, { onConflict: 'rto_id,qualification_id' }).select('id').single();
-      if (offerError) throw new Error(`Offer upsert failed: ${offerError.message}`);
-      const offer_id = offerData.id;
-      addLog(`Got offer ID: ${offer_id}`);
-
-    if (qVariation.trim()) {
-      const { error: streamError } = await supabase
-        .from('offer_streams')
-        .upsert({ offer_id: offer_id, name: qVariation.trim() }, { onConflict: 'offer_id,name' });
-
-      if (streamError) {
-        throw new Error(`Stream upsert failed: ${streamError.message}`);
-      }
-      addLog(`Upserted stream/variation: ${qVariation.trim()}`);
+    if (!baseQualCode || !offerRtoId) {
+        alert("Qualification Code and RTO are required.");
+        return;
     }
 
-    const unitsToUpsert = validRows.map(r => ({ code: normCode(r.unit_code), name: norm(r.unit_name) || normCode(r.unit_code), description: norm(r.application_details) }));
-    const uniqueUnits = [...new Map(unitsToUpsert.map(u => [u.code, u])).values()];
-    if (uniqueUnits.length > 0) {
-      const { error: unitError } = await supabase.from('units').upsert(uniqueUnits, { onConflict: 'code' });
-      if (unitError) throw new Error(`Unit upsert failed: ${unitError.message}`);
-      addLog(`Upserted ${uniqueUnits.length} unique units.`);
+    const validRows = rows.filter(r => norm(r.unit_code));
+    if (validRows.length === 0) {
+        alert("No rows with unit codes to save.");
+        return;
     }
-    
-    const { data: unitIdData, error: unitIdError } = await supabase.from('units').select('id, code').in('code', uniqueUnits.map(u => u.code));
-    if (unitIdError) throw new Error(`Fetching unit IDs failed: ${unitIdError.message}`);
-    const unitIdMap = new Map(unitIdData.map(u => [u.code, u.id]));
 
-      const { error: deleteError } = await supabase.from('offer_units').delete().match({ offer_id });
-      if (deleteError) throw new Error(`Deleting old units failed: ${deleteError.message}`);
-      addLog(`Cleared old units for this offer.`);
+    setSaving(true);
+    addLog(`🚀 Saving offer for RTO ${offerRtoId} and Qual ${baseQualCode}`);
 
-    const offerUnitsToLink = [...new Map(validRows.map(row => [row.unit_code, {
-          offer_id,
-          unit_id: unitIdMap.get(normCode(row.unit_code)),
-          unit_type: row.unit_type || 'core',
-          group_code: norm(row.group_label) || null,
-          application_details: norm(row.application_details) || null
-      }])).values()].filter(link => link.unit_id);
-    
-    if(offerUnitsToLink.length > 0) {
-      const { error: offerUnitError } = await supabase.from('offer_units').insert(offerUnitsToLink);
-      if (offerUnitError) throw new Error(`Linking units failed: ${offerUnitError.message}`);
-      addLog(`Linked ${offerUnitsToLink.length} units to the offer.`);
+    try {
+        // Step 1: Ensure Qualification, Offer, and Units exist in master tables
+        const { data: qualData, error: qualError } = await supabase.from('qualifications').upsert({ code: baseQualCode, name: norm(qName) || baseQualCode }, { onConflict: 'code' }).select('id').single();
+        if (qualError) throw new Error(`Qual upsert failed: ${qualError.message}`);
+        const qualification_id = qualData.id;
+
+        const { data: offerData, error: offerError } = await supabase.from('offers').upsert({ rto_id: offerRtoId, qualification_id }, { onConflict: 'rto_id,qualification_id' }).select('id').single();
+        if (offerError) throw new Error(`Offer upsert failed: ${offerError.message}`);
+        const offer_id = offerData.id;
+
+        const unitsToUpsert = validRows.map(r => ({ code: normCode(r.unit_code), name: norm(r.unit_name) || normCode(r.unit_code), description: norm(r.application_details) }));
+        if (unitsToUpsert.length > 0) {
+            const { error: unitError } = await supabase.from('units').upsert(unitsToUpsert, { onConflict: 'code' });
+            if (unitError) throw new Error(`Unit upsert failed: ${unitError.message}`);
+        }
+
+        const { data: unitIdData, error: unitIdError } = await supabase.from('units').select('id, code').in('code', unitsToUpsert.map(u => u.code));
+        if (unitIdError) throw new Error(`Fetching unit IDs failed: ${unitIdError.message}`);
+        const unitIdMap = new Map(unitIdData.map(u => [u.code, u.id]));
+
+        // Step 2: (CRITICAL) Upsert all units from the CSV into the main offer_units table.
+        // This ensures the offer has a "master list" of all possible units with their details.
+        const allOfferUnitsToUpsert = validRows.map(row => ({
+            offer_id,
+            unit_id: unitIdMap.get(normCode(row.unit_code)),
+            unit_type: row.unit_type || 'core',
+            group_code: norm(row.group_label) || null,
+            application_details: norm(row.application_details) || null,
+        })).filter(link => link.unit_id);
+
+        if (allOfferUnitsToUpsert.length > 0) {
+            const { error } = await supabase.from('offer_units').upsert(allOfferUnitsToUpsert, { onConflict: 'offer_id,unit_id' });
+            if (error) throw new Error(`Upserting units to master offer list failed: ${error.message}`);
+            addLog(`Ensured ${allOfferUnitsToUpsert.length} units are in the master offer list.`);
+        }
+
+        // Step 3: Handle the specific logic for a variation vs. a standard save
+        if (qVariation.trim()) {
+            // --- VARIATION LOGIC ---
+            const { data: streamData, error: streamError } = await supabase.from('offer_streams').upsert({ offer_id, name: qVariation.trim() }, { onConflict: 'offer_id,name' }).select('id').single();
+            if (streamError) throw new Error(`Stream upsert failed: ${streamError.message}`);
+            const stream_id = streamData.id;
+            addLog(`Upserted variation: ${qVariation.trim()}`);
+
+            const { error: deleteError } = await supabase.from('offer_variation_units').delete().match({ stream_id });
+            if (deleteError) throw new Error('Failed to clear old variation units.');
+
+            const variationUnitsToLink = allOfferUnitsToUpsert.map(u => ({
+                stream_id,
+                unit_id: u.unit_id,
+            }));
+
+            if (variationUnitsToLink.length > 0) {
+                const { error: insertError } = await supabase.from('offer_variation_units').insert(variationUnitsToLink);
+                if (insertError) throw new Error('Failed to link units to variation.');
+                addLog(`Linked ${variationUnitsToLink.length} units to the variation.`);
+            }
+        } else {
+            // --- STANDARD LOGIC ---
+            const { data: streamUnitIds, error: rpcError } = await supabase.rpc('get_all_stream_unit_ids_for_offer', { p_offer_id: offer_id });
+            if (rpcError) throw new Error(`Could not fetch stream unit IDs: ${rpcError.message}`);
+            const variationUnitIds = new Set((streamUnitIds || []).map(r => r.unit_id));
+
+            const { data: allCurrentOfferUnits, error: fetchError } = await supabase.from('offer_units').select('unit_id').eq('offer_id', offer_id);
+            if (fetchError) throw new Error(`Could not fetch current offer units: ${fetchError.message}`);
+            
+            const csvUnitIds = new Set(allOfferUnitsToUpsert.map(u => u.unit_id));
+            const unitsToDelete = allCurrentOfferUnits
+                .map(row => row.unit_id)
+                .filter(unitId => !csvUnitIds.has(unitId) && !variationUnitIds.has(unitId));
+                
+            if (unitsToDelete.length > 0) {
+                const { error: deleteError } = await supabase.from('offer_units').delete().eq('offer_id', offer_id).in('unit_id', unitsToDelete);
+                if (deleteError) throw new Error(`Deleting old standard units failed: ${deleteError.message}`);
+                addLog(`Removed ${unitsToDelete.length} obsolete standard units.`);
+            }
+        }
+
+        addLog("✅ Save successful!");
+        alert("Save successful!");
+
+    } catch (error) {
+        console.error("Save failed:", error);
+        addLog(`❌ SAVE FAILED: ${error.message}`);
+        alert(`An error occurred: ${error.message}`);
+    } finally {
+        setSaving(false);
     }
+};
     
-    addLog("✅ Save successful!");
-    alert("Save successful!");
-
-  } catch (error) {
-    console.error("Save failed:", error);
-    addLog(`❌ SAVE FAILED: ${error.message}`);
-    alert(`An error occurred: ${error.message}`);
-  } finally { setSaving(false); }
- };
-  
+ // ... (keep the clearForm function and the JSX return statement as they were)
   const clearForm = () => {
     if(window.confirm("Clear form?")) {
       setRtoId(""); setQCode(""); setQName(""); setQVariation(""); setRows([EMPTY_ROW]);

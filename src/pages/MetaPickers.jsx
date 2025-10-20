@@ -2,16 +2,14 @@ import { useMemo } from "react";
 
 export default function MetaPickers({
   date, setDate, rtoId, setRtoId, rtos, dataset, rtoIndex,
-  qualificationCode, onQualificationChange,
+  qualificationCode, onQualificationChange, streamId, setStreamId, currentQual
 }) {
   const qualifications = useMemo(() => {
     if (!dataset || !rtoId) return [];
     
-    // Get the map of qual codes to offer IDs for the selected RTO
     const rtoQualMap = rtoIndex.byRto.get(rtoId);
     if (!rtoQualMap) return [];
 
-    // Create a unique list of qualifications for this RTO
     const qualList = [];
     rtoQualMap.forEach((offerId) => {
       const offer = dataset[offerId];
@@ -26,6 +24,10 @@ export default function MetaPickers({
 
     return qualList.sort((a, b) => a.code.localeCompare(b.code));
   }, [dataset, rtoId, rtoIndex]);
+
+  const variations = useMemo(() => {
+    return currentQual?.variations || [];
+  }, [currentQual]);
 
   return (
     <div className="grid cols-2" style={{ alignItems: "end", gap: 12 }}>
@@ -46,7 +48,7 @@ export default function MetaPickers({
         </select>
       </div>
 
-      <div className="full-width">
+      <div className={qualificationCode ? "" : "full-width"}>
         <label className="label">Qualification</label>
         <select
           value={qualificationCode}
@@ -54,7 +56,6 @@ export default function MetaPickers({
           disabled={!rtoId}
         >
           <option value="">Select a qualification...</option>
-          {/* **FIXED**: The key is now `q.offer_id`, which is always unique. */}
           {qualifications.map((q) => (
             <option key={q.offer_id} value={q.code}>
               {q.code} — {q.name}
@@ -62,6 +63,27 @@ export default function MetaPickers({
           ))}
         </select>
       </div>
+
+      {qualificationCode && (
+        <div>
+          <label className="label">Variation</label>
+          {variations.length > 0 ? (
+            <select
+              value={streamId}
+              onChange={(e) => setStreamId(e.target.value)}
+            >
+              <option value="">Select a variation...</option>
+              {variations.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input type="text" value="Standard" disabled />
+          )}
+        </div>
+      )}
     </div>
   );
 }

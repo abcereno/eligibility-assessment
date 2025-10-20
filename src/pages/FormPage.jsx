@@ -45,6 +45,7 @@ export default function FormPage() {
   const [date, setDate] = useState(getTodayString());
   const [rtoId, setRtoId] = useState("");
   const [qualificationCode, setQualificationCode] = useState("");
+  const [streamId, setStreamId] = useState("");
   const [person, setPerson] = useState({ name: "", email: "", phone: "" });
   const [notes, setNotes] = useState("");
   const [workHistory, setWorkHistory] = useState("");
@@ -56,7 +57,17 @@ export default function FormPage() {
   }, [byRto, rtoId, qualificationCode]);
 
   const currentQual = useMemo(() => dataset?.[currentOfferId] || null, [dataset, currentOfferId]);
-  const allUnits = currentQual?.units || [];
+  
+  const allUnits = useMemo(() => {
+    if (!currentQual) return [];
+    if (streamId) {
+      const selectedStream = currentQual.variations.find(v => v.id === streamId);
+      return selectedStream?.units || [];
+    }
+    // **MODIFIED**: Default to the main 'units' array which is now correctly filtered.
+    return currentQual.units || [];
+  }, [currentQual, streamId]);
+
   const unitCount = allUnits.length;
 
   useEffect(() => {
@@ -181,7 +192,7 @@ export default function FormPage() {
     <>
       <div className="grid" style={{ gridTemplateColumns: "1fr" }}>
         <div className="card reveal"><h2 className="section-title">Personal Details</h2><PersonalDetails {...{ person, setPerson, notes, setNotes, workHistory, setWorkHistory, callTranscript, setCallTranscript }} /></div>
-        <div className="card reveal"><h1 className="section-title">Skills & Eligibility Assessment</h1><MetaPickers {...{ date, setDate, rtoId, setRtoId, rtos, dataset, rtoIndex: { byRto }, qualificationCode, onQualificationChange: val => { setQualificationCode(val); resetChecks(); }, unitCount, evidencePercent, refereePercent, gapPercent }} /></div>
+        <div className="card reveal"><h1 className="section-title">Skills & Eligibility Assessment</h1><MetaPickers {...{ date, setDate, rtoId, setRtoId, rtos, dataset, rtoIndex: { byRto }, qualificationCode, onQualificationChange: val => { setQualificationCode(val); setStreamId(""); resetChecks(); }, streamId, setStreamId, currentQual }} /></div>
         
         {currentQual && (
         <div className="card reveal progress-card">
