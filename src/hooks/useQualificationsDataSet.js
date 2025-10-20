@@ -49,19 +49,26 @@ export function useQualificationsDataset() {
                             group: ou.group_code,
                             application_details: ou.application_details,
                         })),
-                        variations: offer.offer_streams.map(os => ({
-                            id: os.id,
-                            name: os.name,
-                            units: os.offer_variation_units.map(ov_unit => {
-                                const standardUnit = offer.offer_units.find(ou => ou.units.id === ov_unit.units.id);
-                                return {
-                                    ...ov_unit.units,
-                                    type: standardUnit?.unit_type || 'elective',
-                                    group: standardUnit?.group_code || null,
-                                    application_details: standardUnit?.application_details || null,
-                                };
-                            })
-                        }))
+
+variations: offer.offer_streams.map(os => ({
+    id: os.id,
+    name: os.name,
+    units: os.offer_variation_units.map(ov_unit => {
+        const standardUnit = offer.offer_units.find(ou => ou.units.id === ov_unit.units.id);
+        
+        // --- FIX IS HERE ---
+        // This ensures the 'description' from the database is mapped to 'desc'
+        const { description, ...restOfUnit } = ov_unit.units;
+        return {
+            ...restOfUnit,
+            desc: description, 
+        // --- END FIX ---
+            type: standardUnit?.unit_type || 'elective',
+            group: standardUnit?.group_code || null,
+            application_details: standardUnit?.application_details || null,
+        };
+    })
+}))
                     };
                 }
                 setDataset(formatted);

@@ -25,6 +25,7 @@ export default function UnitsTable({ units, checks, setExclusive }) {
       return a.code.localeCompare(b.code);
     });
   }, [units]);
+console.log(units);
 
   return (
     <div style={{ overflowX: "auto" }}>
