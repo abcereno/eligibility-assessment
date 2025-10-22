@@ -154,7 +154,7 @@ const onSave = async () => {
     addLog(`🚀 Saving offer for RTO ${offerRtoId} and Qual ${baseQualCode}`);
 
     try {
-        // Step 1: Ensure Qualification, Offer, and Units exist in master tables
+        // Step 1: Ensure core entities and master unit list exist
         const { data: qualData, error: qualError } = await supabase.from('qualifications').upsert({ code: baseQualCode, name: norm(qName) || baseQualCode }, { onConflict: 'code' }).select('id').single();
         if (qualError) throw new Error(`Qual upsert failed: ${qualError.message}`);
         const qualification_id = qualData.id;
@@ -173,9 +173,23 @@ const onSave = async () => {
         if (unitIdError) throw new Error(`Fetching unit IDs failed: ${unitIdError.message}`);
         const unitIdMap = new Map(unitIdData.map(u => [u.code, u.id]));
 
-        // Step 2: Handle variations and standard offers differently
+        // Step 2: Always ensure all units from the CSV are in the offer's master unit list
+        const allOfferUnitsToUpsert = validRows.map(row => ({
+            offer_id,
+            unit_id: unitIdMap.get(normCode(row.unit_code)),
+            unit_type: row.unit_type || 'core',
+            group_code: norm(row.group_label) || null,
+            application_details: norm(row.application_details) || null,
+        })).filter(link => link.unit_id);
+
+        if (allOfferUnitsToUpsert.length > 0) {
+            const { error } = await supabase.from('offer_units').upsert(allOfferUnitsToUpsert, { onConflict: 'offer_id,unit_id' });
+            if (error) throw new Error(`Upserting units to master offer list failed: ${error.message}`);
+            addLog(`Ensured ${allOfferUnitsToUpsert.length} units are in the master offer list.`);
+        }
+
+        // Step 3: Handle variation-specific logic
         if (qVariation.trim()) {
-            // --- VARIATION LOGIC ---
             const { data: streamData, error: streamError } = await supabase.from('offer_streams').upsert({ offer_id, name: qVariation.trim() }, { onConflict: 'offer_id,name' }).select('id').single();
             if (streamError) throw new Error(`Stream upsert failed: ${streamError.message}`);
             const stream_id = streamData.id;
@@ -184,10 +198,10 @@ const onSave = async () => {
             const { error: deleteError } = await supabase.from('offer_variation_units').delete().match({ stream_id });
             if (deleteError) throw new Error('Failed to clear old variation units.');
 
-            const variationUnitsToLink = validRows.map(row => ({
+            const variationUnitsToLink = allOfferUnitsToUpsert.map(u => ({
                 stream_id,
-                unit_id: unitIdMap.get(normCode(row.unit_code)),
-            })).filter(link => link.unit_id);
+                unit_id: u.unit_id,
+            }));
 
             if (variationUnitsToLink.length > 0) {
                 const { error: insertError } = await supabase.from('offer_variation_units').insert(variationUnitsToLink);
@@ -195,21 +209,7 @@ const onSave = async () => {
                 addLog(`Linked ${variationUnitsToLink.length} units to the variation.`);
             }
         } else {
-            // --- STANDARD LOGIC (No Variation) ---
-            const allOfferUnitsToUpsert = validRows.map(row => ({
-                offer_id,
-                unit_id: unitIdMap.get(normCode(row.unit_code)),
-                unit_type: row.unit_type || 'core',
-                group_code: norm(row.group_label) || null,
-                application_details: norm(row.application_details) || null,
-            })).filter(link => link.unit_id);
-
-            if (allOfferUnitsToUpsert.length > 0) {
-                const { error } = await supabase.from('offer_units').upsert(allOfferUnitsToUpsert, { onConflict: 'offer_id,unit_id' });
-                if (error) throw new Error(`Upserting units to master offer list failed: ${error.message}`);
-                addLog(`Upserted ${allOfferUnitsToUpsert.length} units to the master offer list.`);
-            }
-            
+            // Step 4: Clean up standard units if not a variation
             const { data: streamUnitIds, error: rpcError } = await supabase.rpc('get_all_stream_unit_ids_for_offer', { p_offer_id: offer_id });
             if (rpcError) throw new Error(`Could not fetch stream unit IDs: ${rpcError.message}`);
             const variationUnitIds = new Set((streamUnitIds || []).map(r => r.unit_id));
