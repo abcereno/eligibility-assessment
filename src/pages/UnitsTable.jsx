@@ -1,31 +1,30 @@
 import React, { useMemo } from "react";
 
-
 export default function UnitsTable({ units, checks, setExclusive }) {
+
   const sortedUnits = useMemo(() => {
+    // [...units] creates a shallow copy before sorting
     return [...units].sort((a, b) => {
       // Core units first
-      if (a.type === 'core' && b.type !== 'core') {
-        return -1;
-      }
-      if (a.type !== 'core' && b.type === 'core') {
-        return 1;
-      }
+      if (a.type === 'core' && b.type !== 'core') return -1;
+      if (a.type !== 'core' && b.type === 'core') return 1;
 
       // Then sort by group/cluster name
       const groupA = a.group || '';
       const groupB = b.group || '';
       const groupCompare = groupA.localeCompare(groupB, undefined, { numeric: true });
+      if (groupCompare !== 0) return groupCompare;
 
-      if (groupCompare !== 0) {
-        return groupCompare;
-      }
-
-      // Finally, sort by unit code as a tie-breaker
-      return a.code.localeCompare(b.code);
+      // Finally, sort by unit code (ensure codes exist)
+      const codeA = a.code || '';
+      const codeB = b.code || '';
+      return codeA.localeCompare(codeB);
     });
   }, [units]);
-console.log(units);
+
+  // Console logs confirmed 41 units are received and sorted
+  console.log("UnitsTable: Received units prop. Length:", units?.length);
+  console.log("UnitsTable: Calculated sortedUnits. Length:", sortedUnits?.length);
 
   return (
     <div style={{ overflowX: "auto" }}>
@@ -44,54 +43,51 @@ console.log(units);
             <th>Gap Training</th>
           </tr>
         </thead>
-        <tbody>
+        {/* --- Ensure NO whitespace/comments directly here --- */}
+        <tbody>{/* --- Start map immediately after tbody --- */}
           {sortedUnits.map((u) => {
+            // Added defensive check: skip rendering if essential data is missing
+            if (!u || !u.id || !u.code) {
+               console.error("UnitsTable: Rendering invalid or incomplete unit object:", u);
+               return null;
+            }
             const tga = `https://training.gov.au/Training/Details/${u.code}`;
             const typeLbl = u.type === "core" ? "Core" : u.type === "elective" ? "Elective" : "";
-            const groupName = `choice-${u.code}`; // radios with same name => only one per row
+            const groupName = `choice-${u.code}`;
 
             return (
-              <tr key={u.code}>
-<td>
-  <strong>{u.code}: {u.name}</strong>
-  <span style={{ fontWeight: "bold", color: u.type === "core" ? "blue" : u.type === "elective" ? "#fdb715" : "red" }}>
-    {" "}({typeLbl}){" "}
-    {u.group ? <strong><span style={{ color: "green" }}>Group: {u.group}</span></strong> : null}
-  </span>
-
-  {/* Adds space above the description if it exists */}
-  {u.desc && (
-    <div style={{ marginTop: '8px' }}>
-      <small>{u.desc}</small>
-    </div>
-  )}
-
-  {/* Adds space above the link */}
-  <div style={{ marginTop: '4px', borderRadius: '4px', backgroundColor: '#9e8dffff', display: 'inline-block', padding: '2px 6px' }}>
-    <a href={tga} target="_blank" rel="noreferrer" className="tga-link-button">
-      View on training.gov.au
-    </a>
-  </div>
-</td>
+              // Ensure no whitespace between <tr> elements either
+              <tr key={u.id}>
+                <td>
+                  <strong>{u.code}: {u.name}</strong>
+                  <span style={{ fontWeight: "bold", color: u.type === "core" ? "blue" : u.type === "elective" ? "#fdb715" : "red" }}>
+                    {" "}({typeLbl}){" "}
+                    {u.group ? <strong><span style={{ color: "green" }}>Group: {u.group}</span></strong> : null}
+                  </span>
+                  {u.desc && ( <div style={{ marginTop: '8px' }}> <small>{u.desc}</small> </div> )}
+                  <div style={{ marginTop: '4px', borderRadius: '4px', backgroundColor: '#9e8dffff', display: 'inline-block', padding: '2px 6px' }}>
+                    <a href={tga} target="_blank" rel="noreferrer" className="tga-link-button"> View on training.gov.au </a>
+                  </div>
+                </td>
                 <td>
                   <label>
-                    <input type="radio" name={groupName} checked={checks.evidence.has(u.code)} onChange={() => setExclusive("evidence", u.code)} />
+                    <input type="checkbox" name={groupName} checked={checks.evidence.has(u.code)} onChange={() => setExclusive("evidence", u.code)} />
                   </label>
                 </td>
                 <td>
                   <label>
-                    <input type="radio" name={groupName} checked={checks.referee.has(u.code)} onChange={() => setExclusive("referee", u.code)} />
+                    <input type="checkbox" name={groupName} checked={checks.referee.has(u.code)} onChange={() => setExclusive("referee", u.code)} />
                   </label>
                 </td>
                 <td>
                   <label>
-                    <input type="radio" name={groupName} checked={checks.gap.has(u.code)} onChange={() => setExclusive("gap", u.code)} />
+                    <input type="checkbox" name={groupName} checked={checks.gap.has(u.code)} onChange={() => setExclusive("gap", u.code)} />
                   </label>
                 </td>
-              </tr>
+              </tr> // --- End tr immediately before next map iteration ---
             );
           })}
-        </tbody>
+        {/* --- End map immediately before /tbody --- */}</tbody>{/* --- Ensure NO whitespace/comments directly here --- */}
       </table>
     </div>
   );

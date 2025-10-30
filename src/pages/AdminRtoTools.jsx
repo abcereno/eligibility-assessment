@@ -1,5 +1,4 @@
 import RtoAddForm from "../components/RtoAddForm";
-import RtoFileUpload from "../components/RtoFileUpload";
 import RtoOfferBuilder from "../components/RtoOfferBuilder";
 export default function AdminRtoTools() {
   return (

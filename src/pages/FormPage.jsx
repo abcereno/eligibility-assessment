@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom";
 import useRevealOnScroll from "../hooks/useRevealOnScroll";
 import { useQualificationsDataset } from "../hooks/useQualificationsDataSet";
 import { useRtos } from "../hooks/useRtos";
-import { useChecksExclusive } from "../hooks/useChecksExclusive";
+import { useChecksExclusive } from "../hooks/useChecksExclusive"; // This hook is now modified
 import { useLocalDraft } from "../hooks/useLocalDraft";
 import useSavedAssessments from "../hooks/useSavedAssessments";
 import MetaPickers from "./MetaPickers";
@@ -22,6 +22,9 @@ const LS_DRAFT_KEY = "tc.form.v2";
 
 const getTodayString = () => new Date().toISOString().split('T')[0];
 
+// Helper function for percentage calculation
+const pct = (n, total) => (total > 0 ? Math.round((n / total) * 100) : 0);
+
 export default function FormPage() {
   useRevealOnScroll();
   const { company } = useCompany();
@@ -33,6 +36,7 @@ export default function FormPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isPdfPreviewOpen, setIsPdfPreviewOpen] = useState(false);
+  const hasShownWarning = useRef(false); // Ref to track if warning was shown
 
   useEffect(() => { if (!company) nav("/"); }, [company, nav]);
 
@@ -64,25 +68,77 @@ export default function FormPage() {
       const selectedStream = currentQual.variations.find(v => v.id === streamId);
       return selectedStream?.units || [];
     }
-    // **MODIFIED**: Default to the main 'units' array which is now correctly filtered.
     return currentQual.units || [];
   }, [currentQual, streamId]);
 
-  const unitCount = allUnits.length;
+  // --- Percentage Logic ---
+  // 1. Call the modified hook
+  const { checks, setExclusive, resetChecks } = useChecksExclusive();
+
+  // 2. Calculate the fixed unit count (Base Total: Core + non-optional Electives)
+  const dynamicUnitCount = useMemo(() => {
+    if (!allUnits.length) return 0;
+    
+    // The total (denominator) is *only* the count of Core + Standard Elective units.
+    const nonOptionalUnits = allUnits.filter(u => !u.group?.toLowerCase().includes('optional'));
+    
+    return nonOptionalUnits.length; // This is the correct fixed base total
+
+  }, [allUnits]);
+
+  // 3. Calculate dynamic percentages
+  const evidencePercent = useMemo(() => pct(checks.evidence.size, dynamicUnitCount), [checks.evidence, dynamicUnitCount]);
+  const refereePercent = useMemo(() => pct(checks.referee.size, dynamicUnitCount), [checks.referee, dynamicUnitCount]);
+  const gapPercent = useMemo(() => pct(checks.gap.size, dynamicUnitCount), [checks.gap, dynamicUnitCount]);
+  
+  // 4. Calculate total number of units selected (for the alert)
+  const totalSelected = useMemo(() => {
+    return checks.evidence.size + checks.referee.size + checks.gap.size;
+  }, [checks]);
+  // --- End of Percentage Logic ---
+
 
   useEffect(() => {
     if (!dataset || !qualificationCode) return;
     const rtoHasQual = byRto.get(rtoId)?.has(qualificationCode);
-    if (!rtoHasQual) setQualificationCode("");
+    if (!rtoHasQual) {
+        setQualificationCode("");
+        setStreamId(""); // Also reset stream when qual becomes invalid
+    }
+    // Reset warning when qualification changes
+    hasShownWarning.current = false;
   }, [rtoId, qualificationCode, byRto, dataset]);
 
-  const { checks, setExclusive, resetChecks, evidencePercent, refereePercent, gapPercent } = useChecksExclusive(unitCount);
+
+  // --- NEW: Alert logic ---
+  const showToast = useCallback((message, type = 'success') => {
+    setToast({ message, type }); setTimeout(() => setToast(null), 3500);
+  }, []);
+
+  useEffect(() => {
+    if (dynamicUnitCount <= 0) {
+      hasShownWarning.current = false; // Reset if qual changes or count is 0
+      return;
+    }
+
+    if (totalSelected > dynamicUnitCount) {
+      if (!hasShownWarning.current) { // Only show once
+        showToast(`Warning: ${totalSelected} units selected, but only ${dynamicUnitCount} are required.`, "error"); // Using "error" type for visibility
+        hasShownWarning.current = true; // Mark as shown
+      }
+    } else {
+      hasShownWarning.current = false; // Reset if the count goes back to valid
+    }
+  }, [totalSelected, dynamicUnitCount, showToast]);
+  // --- End of new logic ---
+
 
   useLocalDraft({
-    seed: { date, rtoId, qualificationCode, person, notes, workHistory, callTranscript, checks },
+    seed: { date, rtoId, qualificationCode, streamId, person, notes, workHistory, callTranscript, checks }, // Added streamId
     onLoad: (s) => {
       setDate(s.date || getTodayString()); setRtoId(s.rtoId || "");
       setQualificationCode(s.qualificationCode || "");
+      setStreamId(s.streamId || ""); // Load streamId
       setPerson(s.person || { name: "", email: "", phone: "" });
       setNotes(s.notes || ""); setWorkHistory(s.workHistory || "");
       setCallTranscript(s.callTranscript || ""); resetChecks(s.checks);
@@ -96,10 +152,6 @@ export default function FormPage() {
     }
   }, [rtos]);
 
-  const showToast = useCallback((message, type = 'success') => {
-    setToast({ message, type }); setTimeout(() => setToast(null), 3500);
-  }, []);
-
   const confirmAction = useCallback((message) => {
     return new Promise((resolve) => setModal({ message, onConfirm: (confirmed) => { setModal(null); resolve(confirmed); } }));
   }, []);
@@ -109,13 +161,15 @@ export default function FormPage() {
       name: person.name, email: person.email || "", phone: person.phone || "", date, notes, workHistory, callTranscript, rtoId,
       qualification: `${qualificationCode} — ${currentQual?.name || ""}`,
       qualificationCode, evidenceCodes: [...checks.evidence], refereeCodes: [...checks.referee], gapCodes: [...checks.gap],
-      unitCount, percentageOfEvidence: `${evidencePercent}%`, percentageOfReferee: `${refereePercent}%`, percentageOfGap: `${gapPercent}%`,
+      unitCount: dynamicUnitCount, // Use dynamic count
+      percentageOfEvidence: `${evidencePercent}%`, percentageOfReferee: `${refereePercent}%`, percentageOfGap: `${gapPercent}%`,
     }),
     onLoad: (item) => {
       setPerson(p => ({ ...p, name: item.name, email: item.email || "", phone: item.phone || "" }));
       setDate(item.date || getTodayString()); setNotes(item.notes || "");
       setWorkHistory(item.workHistory || ""); setCallTranscript(item.callTranscript || "");
       setRtoId(item.rtoId || ""); setQualificationCode(item.qualificationCode || "");
+      setStreamId(item.streamId || ""); // Also load streamId on load
       resetChecks({ evidence: new Set(item.evidenceCodes), referee: new Set(item.refereeCodes), gap: new Set(item.gapCodes) });
       window.scrollTo({ top: 0, behavior: "smooth" });
     },
@@ -137,8 +191,14 @@ export default function FormPage() {
     if (!person.name?.trim() || !date || !qualificationCode) {
       return showToast("Name, Date, and Qualification are required.", "error");
     }
-    const confirmed = await confirmAction(`Are you sure you want to ${successMsg.toLowerCase().replace("!", "")}?`);
-    if (!confirmed) return;
+    // New check: Warn if total selected exceeds base total, but still allow save
+    if (totalSelected > dynamicUnitCount) {
+      const confirmedOver = await confirmAction(`Warning: You have selected ${totalSelected} units, which is more than the required ${dynamicUnitCount}. Are you sure you want to continue?`);
+      if (!confirmedOver) return;
+    } else {
+      const confirmed = await confirmAction(`Are you sure you want to ${successMsg.toLowerCase().replace("!", "")}?`);
+      if (!confirmed) return;
+    }
 
     setIsSubmitting(true);
     showToast("Processing...");
@@ -158,7 +218,8 @@ export default function FormPage() {
       const [year, month, day] = date.split('-');
       const payload = {
         name: person.name, email: person.email, phone: person.phone, date: `${day}-${month}-${year}`, notes, workHistory, callTranscript,
-        qualification: `${qualificationCode} — ${currentQual?.name || ""}`, unitCount,
+        qualification: `${qualificationCode} — ${currentQual?.name || ""}`,
+        unitCount: dynamicUnitCount, // Use dynamic count
         percentageOfEvidence: `${evidencePercent}%`, percentageOfReferee: `${refereePercent}%`, percentageOfGap: `${gapPercent}%`,
         unitsEvidenceList: evidenceList.join('\n'), unitsRefereeList: refereeList.join('\n'), unitsGapList: gapList.join('\n'),
       };
@@ -178,6 +239,7 @@ export default function FormPage() {
     setDate(getTodayString());
     setRtoId("");
     setQualificationCode("");
+    setStreamId(""); // Also clear streamId
     setPerson({ name: "", email: "", phone: "" });
     setNotes("");
     setWorkHistory("");
@@ -197,10 +259,10 @@ export default function FormPage() {
         {currentQual && (
         <div className="card reveal progress-card">
             <div className="stat-box">
-                <div className="water-fill" style={{ top: `${100 - (unitCount > 0 ? 100 : 0)}%` }}></div>
+                <div className="water-fill" style={{ top: `${100 - (dynamicUnitCount > 0 ? 100 : 0)}%` }}></div>
                 <div className="stat-box-content">
                     <span className="stat-label">Total Units</span>
-                    <span className="stat-value">{unitCount}</span>
+                    <span className="stat-value">{dynamicUnitCount}</span> 
                 </div>
             </div>
             <div className="stat-box">
@@ -228,9 +290,15 @@ export default function FormPage() {
         )}
 
         {currentQual && <div className="card reveal">
-            <h2 className="section-title">{currentQual.code} — ${currentQual.name}</h2>
+            <h2 className="section-title">{currentQual.code} — {currentQual.name}</h2>
             <UnitsTable units={allUnits} checks={checks} setExclusive={setExclusive} />
+            <ProgressBar 
+              evidencePercent={evidencePercent} 
+              refereePercent={refereePercent} 
+              gapPercent={gapPercent} 
+            />
         </div>}
+
         <div className="card reveal" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="btn" onClick={handleSendToWebhook} disabled={isSubmitting}>{isSubmitting ? "Saving..." : "Save to Lead Connector"}</button>
             <button className="btn" onClick={handleDatabaseSave} disabled={isSubmitting}>{isSubmitting ? "Saving..." : "Save to Database"}</button>
