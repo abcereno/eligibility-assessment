@@ -175,6 +175,7 @@ export default function FormPage() {
     },
   });
 
+  // These lists ALREADY include the unit code: "AUR123: Unit Name"
   const evidenceList = useMemo(() => allUnits.filter(u => checks.evidence.has(u.code)).map(u => `${u.code}: ${u.name}`), [allUnits, checks.evidence]);
   const refereeList = useMemo(() => allUnits.filter(u => checks.referee.has(u.code)).map(u => `${u.code}: ${u.name}`), [allUnits, checks.referee]);
   const gapList = useMemo(() => allUnits.filter(u => checks.gap.has(u.code)).map(u => `${u.code}: ${u.name}`), [allUnits, checks.gap]);
@@ -318,7 +319,9 @@ export default function FormPage() {
           date={date}
           qualificationName={`${qualificationCode} — ${currentQual?.name || ""}`}
           progress={{ evidencePercent, refereePercent, gapPercent }}
-          lists={{ evidenceList: evidenceList.map(item => item.split(': ')[1]), refereeList: refereeList.map(item => item.split(': ')[1]), gapList: gapList.map(item => item.split(': ')[1]) }}
+          // --- CHANGE IS HERE: Passing the full string lists directly ---
+          lists={{ evidenceList, refereeList, gapList }}
+          // ------------------------------------------------------------
         />
       )}
     </>
